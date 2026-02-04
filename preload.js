@@ -1,12 +1,22 @@
 const { contextBridge } = require('electron');
+const path = require('path');
 
 // Load modules - with sandbox: false, we should have full Node.js access
 let axios, XLSX;
 
 try {
-  // Direct require should work now
-  axios = require('axios');
-  XLSX = require('xlsx');
+  // In packaged app, modules might be in different location
+  // Try to require from app.asar or unpacked location
+  try {
+    axios = require('axios');
+    XLSX = require('xlsx');
+  } catch (err) {
+    // If direct require fails, try from app path
+    const appPath = process.env.APP_PATH || __dirname;
+    const nodeModulesPath = path.join(appPath, '..', 'node_modules');
+    axios = require(path.join(nodeModulesPath, 'axios'));
+    XLSX = require(path.join(nodeModulesPath, 'xlsx'));
+  }
   
   console.log('[Preload] ✓ Modules loaded successfully');
   console.log('[Preload] axios type:', typeof axios);

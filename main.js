@@ -33,7 +33,7 @@ function createWindow() {
       contextIsolation: true,
       sandbox: false  // Disable sandbox to allow Node.js modules in preload
     },
-    icon: path.join(__dirname, 'assets', 'icon.png'),
+    icon: path.join(__dirname, 'assets', 'icon.png'), // Will use icon.ico for Windows builds
     title: 'Point of Sale System'
   });
 
