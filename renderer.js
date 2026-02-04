@@ -32,7 +32,7 @@ let cart = [];
 let excelUrl = '';
 
 // Default Excel URL - Google Sheets
-const DEFAULT_EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1n4Qvos_RZLgex2pxisiJGYjgneDbmujRkJuRE-W0bEM/';
+const DEFAULT_EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1mBy447WJ_QUle4MUA-GhZplP8UMowmuSJj6awjki5yQ/edit?gid=850404331#gid=850404331';
 
 // DOM Elements (will be initialized in DOMContentLoaded)
 let productsGrid, cartItems, searchInput, loadBtn, refreshBtn, excelUrlInput;
@@ -73,11 +73,16 @@ document.addEventListener('DOMContentLoaded', () => {
     
     console.log('All DOM elements loaded successfully');
     
-    // Clear old OneDrive URL from localStorage and use Google Sheets
+    // Clear old URLs from localStorage and use the latest Google Sheets URL
     const storedUrl = localStorage.getItem('excelUrl');
-    // If stored URL is OneDrive, use default Google Sheets URL instead
-    if (storedUrl && (storedUrl.includes('onedrive') || storedUrl.includes('excel.cloud.microsoft'))) {
-        console.log('[Init] Clearing old OneDrive URL from storage');
+    // If stored URL is old (OneDrive or old Google Sheets), use default URL instead
+    const oldSheetId = '1n4Qvos_RZLgex2pxisiJGYjgneDbmujRkJuRE-W0bEM';
+    if (storedUrl && (
+        storedUrl.includes('onedrive') || 
+        storedUrl.includes('excel.cloud.microsoft') ||
+        storedUrl.includes(oldSheetId)  // Old Google Sheets URL
+    )) {
+        console.log('[Init] Clearing old URL from storage');
         localStorage.removeItem('excelUrl');
         excelUrlInput.value = DEFAULT_EXCEL_URL;
     } else {
@@ -226,40 +231,103 @@ function processExcelData(arrayBuffer) {
             throw new Error('Excel file is empty or contains no data rows');
         }
         
-        // Process products with more flexible column matching
+        // Find column names that match our expected columns (case-insensitive, flexible matching)
+        const allColumns = data.length > 0 ? Object.keys(data[0]) : [];
+        console.log('All column names:', allColumns);
+        
+        // Find Urdu name column with flexible matching
+        const urduColumn = allColumns.find(col => 
+            /name.*urdu|urdu.*name/i.test(col) || 
+            col.toLowerCase().includes('urdu')
+        );
+        console.log('Found Urdu column:', urduColumn);
+        
+        // Find English name column
+        const englishColumn = allColumns.find(col => 
+            /name.*english|english.*name/i.test(col) || 
+            (col.toLowerCase().includes('name') && !col.toLowerCase().includes('urdu'))
+        ) || allColumns.find(col => /^name$/i.test(col));
+        console.log('Found English name column:', englishColumn);
+        
+        // Process products - handle both old and new column structures
         const rawProducts = data.map((row, index) => {
-            // Try to find name column (case-insensitive, various formats)
-            const nameKeys = Object.keys(row).filter(k => 
-                /name|product|item|title/i.test(k)
-            );
-            const name = nameKeys.length > 0 ? row[nameKeys[0]] : 
-                (row.Name || row.name || row.Product || row.product || 
-                 row['Product Name'] || row['product name'] || 
-                 row.Item || row.item || 'Unknown');
+            // Try to find English name column (new structure) or Name (old structure)
+            let name = '';
+            if (englishColumn && row[englishColumn]) {
+                name = row[englishColumn];
+            } else {
+                // Try new structure first
+                name = row['Name (English)'] || row['name (english)'] || 
+                       row['Name(English)'] || row['name(english)'] ||
+                       // Then try old structure
+                       row.Name || row.name || 
+                       row.Product || row.product || 
+                       row['Product Name'] || row['product name'] || 
+                       row.Item || row.item || 'Unknown';
+            }
             
-            // Try to find price column
-            const priceKeys = Object.keys(row).filter(k => 
-                /price|cost|amount|rate/i.test(k)
-            );
-            const price = priceKeys.length > 0 ? parseFloat(row[priceKeys[0]]) || 0 :
-                parseFloat(row.Price || row.price || row.Cost || row.cost || 
-                          row['Unit Price'] || row['unit price'] || 0);
+            // Name (Urdu) - try multiple column name variations
+            let nameUrdu = '';
+            if (urduColumn && row[urduColumn]) {
+                nameUrdu = row[urduColumn];
+            } else {
+                nameUrdu = row['Name (Urdu)'] || row['name (urdu)'] || 
+                          row['Name(Urdu)'] || row['name(urdu)'] ||
+                          row['Urdu Name'] || row['urdu name'] || '';
+            }
             
-            // Try to find stock column
-            const stockKeys = Object.keys(row).filter(k => 
-                /stock|quantity|qty|available|in.stock/i.test(k)
-            );
-            const stock = stockKeys.length > 0 ? parseInt(row[stockKeys[0]]) || 0 :
-                parseInt(row.Stock || row.stock || row.Quantity || row.quantity || 
-                        row['In Stock'] || row['in stock'] || 0);
+            if (index === 0) {
+                console.log('First product sample:', {
+                    name: name,
+                    nameUrdu: nameUrdu,
+                    allRowKeys: Object.keys(row),
+                    urduColumn: urduColumn,
+                    urduValue: urduColumn ? row[urduColumn] : 'not found',
+                    rowData: row
+                });
+            }
             
-            // Try to find category column
-            const categoryKeys = Object.keys(row).filter(k => 
-                /category|type|group|class/i.test(k)
-            );
-            const category = categoryKeys.length > 0 ? row[categoryKeys[0]] || 'General' :
-                (row.Category || row.category || row['Product Category'] || 
-                 row['product category'] || 'General');
+            // Price - prioritize exact match, then look for Price column
+            const price = parseFloat(row.Price || row.price || 
+                                    row['Unit Price'] || row['unit price'] || 
+                                    row.Cost || row.cost || 0);
+            
+            // Stock
+            const stock = parseInt(row.Stock || row.stock || 
+                                  row.Quantity || row.quantity || 
+                                  row['In Stock'] || row['in stock'] || 0);
+            
+            // Category
+            const category = row.Category || row.category || 
+                            row['Product Category'] || row['product category'] || 
+                            'General';
+            
+            // Barcode
+            const barcode = row.Barcode || row.barcode || 
+                           row.SKU || row.sku || 
+                           row['Product Code'] || row['product code'] || '';
+            
+            // Min Price and Max Price (optional fields)
+            const minPrice = parseFloat(row['Min Price'] || row['min price'] || 
+                                       row['MinPrice'] || row['minprice'] || 0);
+            const maxPrice = parseFloat(row['Max Price'] || row['max price'] || 
+                                       row['MaxPrice'] || row['maxprice'] || 0);
+            
+            // Build description from available fields
+            let description = '';
+            if (nameUrdu) {
+                description = `Urdu: ${nameUrdu}`;
+            }
+            if (minPrice > 0 || maxPrice > 0) {
+                if (description) description += ' | ';
+                if (minPrice > 0 && maxPrice > 0) {
+                    description += `Price Range: ₹${minPrice.toFixed(2)} - ₹${maxPrice.toFixed(2)}`;
+                } else if (minPrice > 0) {
+                    description += `Min Price: ₹${minPrice.toFixed(2)}`;
+                } else if (maxPrice > 0) {
+                    description += `Max Price: ₹${maxPrice.toFixed(2)}`;
+                }
+            }
             
             return {
                 id: index + 1,
@@ -267,10 +335,11 @@ function processExcelData(arrayBuffer) {
                 price: price,
                 stock: stock,
                 category: String(category).trim(),
-                barcode: row.Barcode || row.barcode || row.SKU || row.sku || 
-                        row['Product Code'] || row['product code'] || '',
-                description: row.Description || row.description || 
-                            row['Product Description'] || row['product description'] || ''
+                barcode: String(barcode).trim(),
+                description: description || (row.Description || row.description || ''),
+                nameUrdu: String(nameUrdu).trim(),
+                minPrice: minPrice,
+                maxPrice: maxPrice
             };
         });
         
@@ -727,15 +796,26 @@ function displayProducts(productsToShow) {
                 console.warn('Invalid product:', product);
                 return '';
             }
+            // Show Urdu name if available
+            const nameDisplay = product.nameUrdu ? 
+                `${product.name}<br><small style="color: #666; font-size: 0.9em;">${product.nameUrdu}</small>` : 
+                product.name;
+            
             return `
                 <div class="product-card" data-id="${product.id}">
                     <div class="product-info">
-                        <h3 class="product-name">${product.name}</h3>
+                        <h3 class="product-name">${nameDisplay}</h3>
                         <p class="product-category">${product.category}</p>
                         <div class="product-details">
-                            <span class="product-price">$${product.price.toFixed(2)}</span>
+                            <span class="product-price">₹${product.price.toFixed(2)}</span>
                             <span class="product-stock">Stock: ${product.stock}</span>
                         </div>
+                        ${product.minPrice > 0 || product.maxPrice > 0 ? 
+                            `<div style="font-size: 11px; color: #666; margin-top: 5px;">
+                                ${product.minPrice > 0 ? `Min: ₹${product.minPrice.toFixed(2)}` : ''}
+                                ${product.minPrice > 0 && product.maxPrice > 0 ? ' - ' : ''}
+                                ${product.maxPrice > 0 ? `Max: ₹${product.maxPrice.toFixed(2)}` : ''}
+                            </div>` : ''}
                     </div>
                     <button class="btn btn-add" onclick="addToCart(${product.id})" ${product.stock === 0 ? 'disabled' : ''}>
                         ${product.stock === 0 ? 'Out of Stock' : 'Add to Cart'}
@@ -774,21 +854,201 @@ function filterProducts() {
     const filtered = products.filter(product => {
         // Convert all values to strings for safe comparison
         const name = String(product.name || '').toLowerCase();
+        const nameUrdu = String(product.nameUrdu || '').toLowerCase();
         const category = String(product.category || '').toLowerCase();
         const barcode = String(product.barcode || '').toLowerCase();
         
         const nameMatch = name.includes(searchTerm);
+        const nameUrduMatch = nameUrdu.includes(searchTerm);
         const categoryMatch = category.includes(searchTerm);
         const barcodeMatch = barcode.includes(searchTerm);
         
-        return nameMatch || categoryMatch || barcodeMatch;
+        return nameMatch || nameUrduMatch || categoryMatch || barcodeMatch;
     });
     
     console.log('Filtered products:', filtered.length);
     displayProducts(filtered);
 }
 
-// Add to cart
+// Price selection modal state
+let selectedProductForPrice = null;
+let selectedPrice = null;
+
+// Show price selection modal
+function showPriceModal(product) {
+    selectedProductForPrice = product;
+    selectedPrice = product.price; // Default to regular price
+    
+    const modal = document.getElementById('priceModal');
+    const productName = document.getElementById('modalProductName');
+    const priceOptions = document.getElementById('priceOptions');
+    const customPriceInput = document.getElementById('customPriceInput');
+    
+    productName.textContent = product.name;
+    customPriceInput.value = product.price.toFixed(2);
+    
+    // Build price options
+    let optionsHTML = '';
+    
+    // Regular price option
+    optionsHTML += `
+        <div class="price-option ${selectedPrice === product.price ? 'selected' : ''}" 
+             onclick="selectPrice(${product.price})">
+            <div class="price-option-label">Regular Price</div>
+            <div class="price-option-value">₹${product.price.toFixed(2)}</div>
+        </div>
+    `;
+    
+    // Min price option (if available)
+    if (product.minPrice && product.minPrice > 0) {
+        optionsHTML += `
+            <div class="price-option ${selectedPrice === product.minPrice ? 'selected' : ''}" 
+                 onclick="selectPrice(${product.minPrice})">
+                <div class="price-option-label">Min Price</div>
+                <div class="price-option-value">$${product.minPrice.toFixed(2)}</div>
+            </div>
+        `;
+    }
+    
+    // Max price option (if available)
+    if (product.maxPrice && product.maxPrice > 0) {
+        optionsHTML += `
+            <div class="price-option ${selectedPrice === product.maxPrice ? 'selected' : ''}" 
+                 onclick="selectPrice(${product.maxPrice})">
+                <div class="price-option-label">Max Price</div>
+                <div class="price-option-value">$${product.maxPrice.toFixed(2)}</div>
+            </div>
+        `;
+    }
+    
+    priceOptions.innerHTML = optionsHTML;
+    modal.style.display = 'block';
+}
+
+// Close price modal
+function closePriceModal() {
+    const modal = document.getElementById('priceModal');
+    modal.style.display = 'none';
+    selectedProductForPrice = null;
+    selectedPrice = null;
+}
+
+// Close modal when clicking outside of it
+if (typeof window.onclick === 'function') {
+    const originalOnclick = window.onclick;
+    window.onclick = function(event) {
+        originalOnclick(event);
+        const priceModal = document.getElementById('priceModal');
+        const languageModal = document.getElementById('languageModal');
+        if (event.target === priceModal) {
+            closePriceModal();
+        }
+        if (event.target === languageModal) {
+            closeLanguageModal();
+        }
+    };
+} else {
+    window.onclick = function(event) {
+        const priceModal = document.getElementById('priceModal');
+        const languageModal = document.getElementById('languageModal');
+        if (event.target === priceModal) {
+            closePriceModal();
+        }
+        if (event.target === languageModal) {
+            closeLanguageModal();
+        }
+    };
+}
+
+// Close modal when clicking outside of it
+window.onclick = function(event) {
+    const priceModal = document.getElementById('priceModal');
+    const languageModal = document.getElementById('languageModal');
+    if (event.target === priceModal) {
+        closePriceModal();
+    }
+    if (event.target === languageModal) {
+        closeLanguageModal();
+    }
+}
+
+// Select a price option
+function selectPrice(price) {
+    selectedPrice = price;
+    const customPriceInput = document.getElementById('customPriceInput');
+    customPriceInput.value = price.toFixed(2);
+    
+    // Update selected state in UI
+    document.querySelectorAll('.price-option').forEach(option => {
+        option.classList.remove('selected');
+        const optionPrice = parseFloat(option.querySelector('.price-option-value').textContent.replace('₹', '').trim());
+        if (Math.abs(optionPrice - price) < 0.01) {
+            option.classList.add('selected');
+        }
+    });
+}
+
+// Confirm price selection and add to cart
+function confirmPriceSelection() {
+    if (!selectedProductForPrice) return;
+    
+    const customPriceInput = document.getElementById('customPriceInput');
+    const customPrice = parseFloat(customPriceInput.value);
+    
+    if (isNaN(customPrice) || customPrice < 0) {
+        showNotification('Please enter a valid price', 'error');
+        return;
+    }
+    
+    // Use custom price if entered, otherwise use selected price
+    const finalPrice = customPrice > 0 ? customPrice : selectedPrice;
+    
+    addToCartWithPrice(selectedProductForPrice.id, finalPrice);
+    closePriceModal();
+}
+
+// Add to cart with specific price
+function addToCartWithPrice(productId, price) {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+
+    if (product.stock === 0) {
+        showNotification('Product is out of stock', 'error');
+        return;
+    }
+
+    // Check if same product with same custom price already exists
+    const cartItem = cart.find(item => 
+        item.id === productId && 
+        item.customPrice && 
+        Math.abs(item.customPrice - price) < 0.01
+    );
+    
+    if (cartItem) {
+        // Same product with same price - increase quantity
+        if (cartItem.quantity >= product.stock) {
+            showNotification('Not enough stock available', 'error');
+            return;
+        }
+        cartItem.quantity++;
+    } else {
+        // New item or different price - add new entry
+        const isCustomPrice = Math.abs(price - product.price) > 0.01;
+        cart.push({
+            ...product,
+            price: price, // Use the selected/custom price
+            customPrice: isCustomPrice ? price : undefined, // Track if this is a custom price
+            originalPrice: product.price, // Keep original for reference
+            quantity: 1
+        });
+    }
+
+    updateCart();
+    const priceMsg = Math.abs(price - product.price) > 0.01 ? ` at ₹${price.toFixed(2)}` : '';
+    showNotification(`${product.name} added to cart${priceMsg}`, 'success');
+}
+
+// Add to cart (original function - now checks for min/max price)
 function addToCart(productId) {
     const product = products.find(p => p.id === productId);
     if (!product) return;
@@ -798,23 +1058,21 @@ function addToCart(productId) {
         return;
     }
 
-    const cartItem = cart.find(item => item.id === productId);
-    if (cartItem) {
-        if (cartItem.quantity >= product.stock) {
-            showNotification('Not enough stock available', 'error');
-            return;
-        }
-        cartItem.quantity++;
-    } else {
-        cart.push({
-            ...product,
-            quantity: 1
-        });
+    // If product has min/max price, show price selection modal
+    if ((product.minPrice && product.minPrice > 0) || (product.maxPrice && product.maxPrice > 0)) {
+        showPriceModal(product);
+        return;
     }
 
-    updateCart();
-    showNotification(`${product.name} added to cart`, 'success');
+    // Otherwise, add with regular price
+    addToCartWithPrice(productId, product.price);
 }
+
+// Make functions available globally
+window.addToCart = addToCart;
+window.selectPrice = selectPrice;
+window.closePriceModal = closePriceModal;
+window.confirmPriceSelection = confirmPriceSelection;
 
 // Remove from cart
 function removeFromCart(productId) {
@@ -822,8 +1080,9 @@ function removeFromCart(productId) {
     updateCart();
 }
 
-// Update quantity
+// Update quantity by product ID (for backward compatibility)
 function updateQuantity(productId, change) {
+    // Find first item with this ID
     const cartItem = cart.find(item => item.id === productId);
     if (!cartItem) return;
 
@@ -844,6 +1103,37 @@ function updateQuantity(productId, change) {
     updateCart();
 }
 
+// Update quantity by index (handles items with custom prices)
+function updateQuantityByIndex(itemIndex, change) {
+    if (itemIndex < 0 || itemIndex >= cart.length) return;
+    
+    const cartItem = cart[itemIndex];
+    const product = products.find(p => p.id === cartItem.id);
+    const newQuantity = cartItem.quantity + change;
+
+    if (newQuantity <= 0) {
+        cart.splice(itemIndex, 1);
+        updateCart();
+        return;
+    }
+
+    if (newQuantity > product.stock) {
+        showNotification('Not enough stock available', 'error');
+        return;
+    }
+
+    cartItem.quantity = newQuantity;
+    updateCart();
+}
+
+// Remove from cart by index
+function removeFromCartByIndex(itemIndex) {
+    if (itemIndex >= 0 && itemIndex < cart.length) {
+        cart.splice(itemIndex, 1);
+        updateCart();
+    }
+}
+
 // Update cart display
 function updateCart() {
     if (cart.length === 0) {
@@ -852,23 +1142,34 @@ function updateCart() {
         return;
     }
 
-    cartItems.innerHTML = cart.map(item => `
-        <div class="cart-item">
+    cartItems.innerHTML = cart.map((item, index) => {
+        // Check if this item has a custom price
+        const hasCustomPrice = item.customPrice && item.customPrice !== item.originalPrice;
+        const priceDisplay = hasCustomPrice ? 
+            `<p>₹${item.price.toFixed(2)} each <span style="color: #ff9800; font-size: 0.85em;">(Custom)</span></p>` :
+            `<p>₹${item.price.toFixed(2)} each</p>`;
+        
+        // Use a unique key for items with same ID but different prices
+        const itemKey = hasCustomPrice ? `${item.id}_${item.price}_${index}` : item.id;
+        
+        return `
+        <div class="cart-item" data-item-key="${itemKey}">
             <div class="cart-item-info">
                 <h4>${item.name}</h4>
-                <p>$${item.price.toFixed(2)} each</p>
+                ${priceDisplay}
             </div>
             <div class="cart-item-controls">
-                <button class="btn-quantity" onclick="updateQuantity(${item.id}, -1)">-</button>
+                <button class="btn-quantity" onclick="updateQuantityByIndex(${index}, -1)">-</button>
                 <span class="quantity">${item.quantity}</span>
-                <button class="btn-quantity" onclick="updateQuantity(${item.id}, 1)">+</button>
-                <button class="btn-remove" onclick="removeFromCart(${item.id})">×</button>
+                <button class="btn-quantity" onclick="updateQuantityByIndex(${index}, 1)">+</button>
+                <button class="btn-remove" onclick="removeFromCartByIndex(${index})">×</button>
             </div>
             <div class="cart-item-total">
-                $${(item.price * item.quantity).toFixed(2)}
+                ₹${(item.price * item.quantity).toFixed(2)}
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 
     updateSummary();
 }
@@ -879,9 +1180,9 @@ function updateSummary() {
     const tax = subtotal * 0.10; // 10% tax
     const total = subtotal + tax;
 
-    subtotalEl.textContent = `$${subtotal.toFixed(2)}`;
-    taxEl.textContent = `$${tax.toFixed(2)}`;
-    totalEl.textContent = `$${total.toFixed(2)}`;
+    subtotalEl.textContent = `₹${subtotal.toFixed(2)}`;
+    taxEl.textContent = `₹${tax.toFixed(2)}`;
+    totalEl.textContent = `₹${total.toFixed(2)}`;
 }
 
 // Clear cart
@@ -896,14 +1197,32 @@ function clearCart() {
 }
 
 // Checkout
-function checkout() {
-    if (cart.length === 0) {
-        showNotification('Cart is empty', 'error');
-        return;
-    }
+// Language selection state
+let selectedReceiptLanguage = 'english';
 
-    const total = parseFloat(totalEl.textContent.replace('$', ''));
-    const receipt = generateReceipt();
+// Show language selection modal
+function showLanguageModal() {
+    const modal = document.getElementById('languageModal');
+    modal.style.display = 'block';
+}
+
+// Close language modal
+function closeLanguageModal() {
+    const modal = document.getElementById('languageModal');
+    modal.style.display = 'none';
+}
+
+// Select language and proceed with checkout
+function selectLanguage(language) {
+    selectedReceiptLanguage = language;
+    closeLanguageModal();
+    proceedWithCheckout();
+}
+
+// Proceed with checkout after language selection
+function proceedWithCheckout() {
+    const total = parseFloat(totalEl.textContent.replace('₹', '').replace('Rs.', '').trim());
+    const receipt = generateReceipt(selectedReceiptLanguage);
     
     // Show receipt in a new window or print
     const receiptWindow = window.open('', '_blank');
@@ -917,66 +1236,111 @@ function checkout() {
     showNotification('Checkout completed successfully!', 'success');
 }
 
-// Generate receipt
-function generateReceipt() {
+function checkout() {
+    if (cart.length === 0) {
+        showNotification('Cart is empty', 'error');
+        return;
+    }
+
+    // Show language selection modal first
+    showLanguageModal();
+}
+
+// Generate receipt with language support
+function generateReceipt(language = 'english') {
     const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const tax = subtotal * 0.10;
     const total = subtotal + tax;
     const date = new Date().toLocaleString();
 
+    // Language translations
+    const translations = {
+        english: {
+            receipt: 'Receipt',
+            date: 'Date',
+            item: 'Item',
+            quantity: 'Quantity',
+            price: 'Price',
+            total: 'Total',
+            subtotal: 'Subtotal',
+            tax: 'Tax (10%)',
+            thankYou: 'Thank you for your purchase!'
+        },
+        urdu: {
+            receipt: 'رسید',
+            date: 'تاریخ',
+            item: 'آئٹم',
+            quantity: 'مقدار',
+            price: 'قیمت',
+            total: 'کل',
+            subtotal: 'ذیلی کل',
+            tax: 'ٹیکس (10%)',
+            thankYou: 'آپ کی خریداری کا شکریہ!'
+        }
+    };
+
+    const t = translations[language] || translations.english;
+    const isUrdu = language === 'urdu';
+    const fontFamily = isUrdu ? 'Arial, "Noto Nastaliq Urdu", "Al Qalam Taj Nastaliq", sans-serif' : 'Arial, sans-serif';
+    const textAlign = isUrdu ? 'right' : 'left';
+
     return `
         <!DOCTYPE html>
-        <html>
+        <html dir="${isUrdu ? 'rtl' : 'ltr'}">
         <head>
-            <title>Receipt</title>
+            <meta charset="UTF-8">
+            <title>${t.receipt}</title>
             <style>
-                body { font-family: Arial, sans-serif; padding: 20px; }
+                body { font-family: ${fontFamily}; padding: 20px; direction: ${isUrdu ? 'rtl' : 'ltr'}; }
                 h1 { text-align: center; }
                 table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-                th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+                th, td { padding: 8px; text-align: ${textAlign}; border-bottom: 1px solid #ddd; }
                 th { background-color: #f2f2f2; }
                 .total { font-weight: bold; font-size: 1.2em; }
-                .right { text-align: right; }
+                .right { text-align: ${isUrdu ? 'left' : 'right'}; }
             </style>
         </head>
         <body>
-            <h1>Receipt</h1>
-            <p><strong>Date:</strong> ${date}</p>
+            <h1>${t.receipt}</h1>
+            <p><strong>${t.date}:</strong> ${date}</p>
             <table>
                 <thead>
                     <tr>
-                        <th>Item</th>
-                        <th>Quantity</th>
-                        <th>Price</th>
-                        <th>Total</th>
+                        <th>${t.item}</th>
+                        <th>${t.quantity}</th>
+                        <th>${t.price}</th>
+                        <th>${t.total}</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${cart.map(item => `
+                    ${cart.map(item => {
+                        const itemName = isUrdu && item.nameUrdu ? item.nameUrdu : item.name;
+                        return `
                         <tr>
-                            <td>${item.name}</td>
+                            <td>${itemName}</td>
                             <td>${item.quantity}</td>
-                            <td>$${item.price.toFixed(2)}</td>
-                            <td>$${(item.price * item.quantity).toFixed(2)}</td>
+                            <td>₹${item.price.toFixed(2)}</td>
+                            <td>₹${(item.price * item.quantity).toFixed(2)}</td>
                         </tr>
-                    `).join('')}
+                    `;
+                    }).join('')}
                 </tbody>
                 <tfoot>
                     <tr>
-                        <td colspan="3" class="right">Subtotal:</td>
-                        <td>$${subtotal.toFixed(2)}</td>
+                        <td colspan="3" class="right">${t.subtotal}:</td>
+                        <td>₹${subtotal.toFixed(2)}</td>
                     </tr>
                     <tr>
-                        <td colspan="3" class="right">Tax (10%):</td>
-                        <td>$${tax.toFixed(2)}</td>
+                        <td colspan="3" class="right">${t.tax}:</td>
+                        <td>₹${tax.toFixed(2)}</td>
                     </tr>
                     <tr class="total">
-                        <td colspan="3" class="right">Total:</td>
-                        <td>$${total.toFixed(2)}</td>
+                        <td colspan="3" class="right">${t.total}:</td>
+                        <td>₹${total.toFixed(2)}</td>
                     </tr>
                 </tfoot>
             </table>
-            <p style="text-align: center; margin-top: 30px;">Thank you for your purchase!</p>
+            <p style="text-align: center; margin-top: 30px;">${t.thankYou}</p>
         </body>
         </html>
     `;
@@ -996,4 +1360,8 @@ function showNotification(message, type = 'info') {
 window.addToCart = addToCart;
 window.removeFromCart = removeFromCart;
 window.updateQuantity = updateQuantity;
+window.updateQuantityByIndex = updateQuantityByIndex;
+window.removeFromCartByIndex = removeFromCartByIndex;
+window.selectLanguage = selectLanguage;
+window.closeLanguageModal = closeLanguageModal;
 
