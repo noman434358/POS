@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Point of Sale System</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>Point of Sale System</h1>
+            <div class="header-controls">
+                <button id="refreshBtn" class="btn btn-secondary">Refresh Products</button>
+                <input type="file" id="fileInput" accept=".xlsx,.xls" style="display: none;">
+                <button id="fileBtn" class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">Choose Local File</button>
+                <input type="text" id="excelUrlInput" placeholder="Excel File URL" class="url-input" readonly>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="products-section">
+                <div class="section-header">
+                    <h2>Products</h2>
+                    <input type="text" id="searchInput" placeholder="Search products..." class="search-input">
+                </div>
+                <div id="productsGrid" class="products-grid">
+                    <div class="loading">Loading products...</div>
+                </div>
+            </div>
+
+            <div class="cart-section">
+                <div class="section-header">
+                    <h2>Cart</h2>
+                    <button id="clearCartBtn" class="btn btn-danger btn-small">Clear</button>
+                </div>
+                <div id="cartItems" class="cart-items">
+                    <div class="empty-cart">Cart is empty</div>
+                </div>
+                <div class="cart-summary">
+                    <div class="summary-row">
+                        <span>Subtotal:</span>
+                        <span id="subtotal">$0.00</span>
+                    </div>
+                    <div class="summary-row">
+                        <span>Tax (10%):</span>
+                        <span id="tax">$0.00</span>
+                    </div>
+                    <div class="summary-row total">
+                        <span>Total:</span>
+                        <span id="total">$0.00</span>
+                    </div>
+                    <button id="checkoutBtn" class="btn btn-success btn-large">Checkout</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="notification" class="notification"></div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
+

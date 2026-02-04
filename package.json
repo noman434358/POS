@@ -1,0 +1,24 @@
+{
+  "name": "pos-system",
+  "version": "1.0.0",
+  "description": "Point of Sale system for local store with Excel data integration",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "keywords": [
+    "pos",
+    "electron",
+    "point-of-sale"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.13.4",
+    "xlsx": "^0.18.5"
+  }
+}
