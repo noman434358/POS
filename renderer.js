@@ -30,14 +30,16 @@ if (axios && typeof axios.get !== 'function') {
 let products = [];
 let cart = [];
 let excelUrl = '';
+let selectedPriceCategory = 'parchon'; // Default: parchon, gatta, or wholesale
 
 // Default Excel URL - Google Sheets
-const DEFAULT_EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1mBy447WJ_QUle4MUA-GhZplP8UMowmuSJj6awjki5yQ/edit?gid=850404331#gid=850404331';
+const DEFAULT_EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1L4iygFD3mB7jlJNAh97eeBfxkC7VBVYdwkH6Rb7SCMQ/edit?gid=1799151543#gid=1799151543';
 
 // DOM Elements (will be initialized in DOMContentLoaded)
 let productsGrid, cartItems, searchInput, loadBtn, refreshBtn, excelUrlInput;
 let fileInput, fileBtn, clearCartBtn, checkoutBtn;
 let subtotalEl, taxEl, totalEl, notification;
+let priceCategorySelect;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -56,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
     taxEl = document.getElementById('tax');
     totalEl = document.getElementById('total');
     notification = document.getElementById('notification');
+    priceCategorySelect = document.getElementById('priceCategory');
     
     // Verify all critical elements exist
     if (!productsGrid || !excelUrlInput || !fileInput || !fileBtn) {
@@ -76,12 +79,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Clear old URLs from localStorage and use the latest Google Sheets URL
     const storedUrl = localStorage.getItem('excelUrl');
     // If stored URL is old (OneDrive or old Google Sheets), use default URL instead
-    const oldSheetId = '1n4Qvos_RZLgex2pxisiJGYjgneDbmujRkJuRE-W0bEM';
-    if (storedUrl && (
+    const oldSheetIds = [
+        '1n4Qvos_RZLgex2pxisiJGYjgneDbmujRkJuRE-W0bEM',  // Old sheet 1
+        '1mBy447WJ_QUle4MUA-GhZplP8UMowmuSJj6awjki5yQ'   // Old sheet 2
+    ];
+    const isOldUrl = storedUrl && (
         storedUrl.includes('onedrive') || 
         storedUrl.includes('excel.cloud.microsoft') ||
-        storedUrl.includes(oldSheetId)  // Old Google Sheets URL
-    )) {
+        oldSheetIds.some(oldId => storedUrl.includes(oldId))
+    );
+    
+    if (isOldUrl) {
         console.log('[Init] Clearing old URL from storage');
         localStorage.removeItem('excelUrl');
         excelUrlInput.value = DEFAULT_EXCEL_URL;
@@ -94,6 +102,29 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set up event listeners
     if (loadBtn) loadBtn.addEventListener('click', loadExcel);
     if (refreshBtn) refreshBtn.addEventListener('click', loadExcel);
+    
+    // Price category selector
+    if (priceCategorySelect) {
+        // Load saved category from localStorage
+        const savedCategory = localStorage.getItem('priceCategory') || 'parchon';
+        selectedPriceCategory = savedCategory;
+        priceCategorySelect.value = savedCategory;
+        
+        priceCategorySelect.addEventListener('change', (e) => {
+            selectedPriceCategory = e.target.value;
+            localStorage.setItem('priceCategory', selectedPriceCategory);
+            // Refresh product display with new prices
+            if (products.length > 0) {
+                const currentSearch = searchInput.value;
+                if (currentSearch) {
+                    filterProducts();
+                } else {
+                    displayProducts(products);
+                }
+            }
+            showNotification(`Price category changed to ${selectedPriceCategory.charAt(0).toUpperCase() + selectedPriceCategory.slice(1)}`, 'success');
+        });
+    }
     
     // File picker button
     if (fileBtn && fileInput) {
@@ -287,27 +318,41 @@ function processExcelData(arrayBuffer) {
                 });
             }
             
-            // Price - prioritize exact match, then look for Price column
-            const price = parseFloat(row.Price || row.price || 
-                                    row['Unit Price'] || row['unit price'] || 
-                                    row.Cost || row.cost || 0);
-            
-            // Stock
-            const stock = parseInt(row.Stock || row.stock || 
-                                  row.Quantity || row.quantity || 
-                                  row['In Stock'] || row['in stock'] || 0);
-            
-            // Category
-            const category = row.Category || row.category || 
-                            row['Product Category'] || row['product category'] || 
-                            'General';
-            
             // Barcode
             const barcode = row.Barcode || row.barcode || 
                            row.SKU || row.sku || 
                            row['Product Code'] || row['product code'] || '';
             
-            // Min Price and Max Price (optional fields)
+            // New price structure: Parchon, Gatta, Wholesale (each with Min/Max)
+            const parchonMinPrice = parseFloat(row['Parchon Min Price'] || row['parchon min price'] || 
+                                              row['ParchonMinPrice'] || row['parchonminprice'] || 0);
+            const parchonMaxPrice = parseFloat(row['Parchon Max Price'] || row['parchon max price'] || 
+                                              row['ParchonMaxPrice'] || row['parchonmaxprice'] || 0);
+            const gattaMinPrice = parseFloat(row['Gatta Min Price'] || row['gatta min price'] || 
+                                            row['GattaMinPrice'] || row['gattaminprice'] || 0);
+            const gattaMaxPrice = parseFloat(row['Gatta Max Price'] || row['gatta max price'] || 
+                                            row['GattaMaxPrice'] || row['gattamaxprice'] || 0);
+            const wholesaleMinPrice = parseFloat(row['Wholesale Min Price'] || row['wholesale min price'] || 
+                                                row['WholesaleMinPrice'] || row['wholesaleminprice'] || 0);
+            const wholesaleMaxPrice = parseFloat(row['Wholesale Max Price'] || row['wholesale max price'] || 
+                                                row['WholesaleMaxPrice'] || row['wholesalemaxprice'] || 0);
+            
+            // Default price: Use Parchon Min Price if available, otherwise first available min price
+            const defaultPrice = parchonMinPrice > 0 ? parchonMinPrice : 
+                               (gattaMinPrice > 0 ? gattaMinPrice : 
+                               (wholesaleMinPrice > 0 ? wholesaleMinPrice : 0));
+            
+            // Stock (not in new structure, set to 999 for unlimited or handle if column exists)
+            const stock = parseInt(row.Stock || row.stock || 
+                                  row.Quantity || row.quantity || 
+                                  row['In Stock'] || row['in stock'] || 999);
+            
+            // Category (not in new structure, set to General)
+            const category = row.Category || row.category || 
+                            row['Product Category'] || row['product category'] || 
+                            'General';
+            
+            // Legacy support: Min Price and Max Price (for backward compatibility)
             const minPrice = parseFloat(row['Min Price'] || row['min price'] || 
                                        row['MinPrice'] || row['minprice'] || 0);
             const maxPrice = parseFloat(row['Max Price'] || row['max price'] || 
@@ -318,26 +363,53 @@ function processExcelData(arrayBuffer) {
             if (nameUrdu) {
                 description = `Urdu: ${nameUrdu}`;
             }
-            if (minPrice > 0 || maxPrice > 0) {
-                if (description) description += ' | ';
-                if (minPrice > 0 && maxPrice > 0) {
-                    description += `Price Range: ₹${minPrice.toFixed(2)} - ₹${maxPrice.toFixed(2)}`;
-                } else if (minPrice > 0) {
-                    description += `Min Price: ₹${minPrice.toFixed(2)}`;
-                } else if (maxPrice > 0) {
-                    description += `Max Price: ₹${maxPrice.toFixed(2)}`;
+            // Build price info string
+            let priceInfo = [];
+            if (parchonMinPrice > 0 || parchonMaxPrice > 0) {
+                if (parchonMinPrice > 0 && parchonMaxPrice > 0) {
+                    priceInfo.push(`Parchon: Rs.${parchonMinPrice.toFixed(2)} - Rs.${parchonMaxPrice.toFixed(2)}`);
+                } else if (parchonMinPrice > 0) {
+                    priceInfo.push(`Parchon: Rs.${parchonMinPrice.toFixed(2)}`);
                 }
+            }
+            if (gattaMinPrice > 0 || gattaMaxPrice > 0) {
+                if (gattaMinPrice > 0 && gattaMaxPrice > 0) {
+                    priceInfo.push(`Gatta: Rs.${gattaMinPrice.toFixed(2)} - Rs.${gattaMaxPrice.toFixed(2)}`);
+                } else if (gattaMinPrice > 0) {
+                    priceInfo.push(`Gatta: Rs.${gattaMinPrice.toFixed(2)}`);
+                }
+            }
+            if (wholesaleMinPrice > 0 || wholesaleMaxPrice > 0) {
+                if (wholesaleMinPrice > 0 && wholesaleMaxPrice > 0) {
+                    priceInfo.push(`Wholesale: Rs.${wholesaleMinPrice.toFixed(2)} - Rs.${wholesaleMaxPrice.toFixed(2)}`);
+                } else if (wholesaleMinPrice > 0) {
+                    priceInfo.push(`Wholesale: Rs.${wholesaleMinPrice.toFixed(2)}`);
+                }
+            }
+            
+            if (priceInfo.length > 0 && description) {
+                description += ' | ' + priceInfo.join(', ');
+            } else if (priceInfo.length > 0) {
+                description = priceInfo.join(', ');
             }
             
             return {
                 id: index + 1,
                 name: String(name).trim(),
-                price: price,
+                price: defaultPrice, // Default price for display
                 stock: stock,
                 category: String(category).trim(),
                 barcode: String(barcode).trim(),
                 description: description || (row.Description || row.description || ''),
                 nameUrdu: String(nameUrdu).trim(),
+                // New price structure
+                parchonMinPrice: parchonMinPrice,
+                parchonMaxPrice: parchonMaxPrice,
+                gattaMinPrice: gattaMinPrice,
+                gattaMaxPrice: gattaMaxPrice,
+                wholesaleMinPrice: wholesaleMinPrice,
+                wholesaleMaxPrice: wholesaleMaxPrice,
+                // Legacy support
                 minPrice: minPrice,
                 maxPrice: maxPrice
             };
@@ -801,21 +873,42 @@ function displayProducts(productsToShow) {
                 `${product.name}<br><small style="color: #666; font-size: 0.9em;">${product.nameUrdu}</small>` : 
                 product.name;
             
+            // Get prices based on selected category
+            let minPrice = 0;
+            let maxPrice = 0;
+            let categoryLabel = '';
+            
+            if (selectedPriceCategory === 'parchon') {
+                minPrice = product.parchonMinPrice || 0;
+                maxPrice = product.parchonMaxPrice || 0;
+                categoryLabel = 'Parchon';
+            } else if (selectedPriceCategory === 'gatta') {
+                minPrice = product.gattaMinPrice || 0;
+                maxPrice = product.gattaMaxPrice || 0;
+                categoryLabel = 'Gatta';
+            } else if (selectedPriceCategory === 'wholesale') {
+                minPrice = product.wholesaleMinPrice || 0;
+                maxPrice = product.wholesaleMaxPrice || 0;
+                categoryLabel = 'Wholesale';
+            }
+            
+            // Use min price as display price, or fallback to default price
+            const displayPrice = minPrice > 0 ? minPrice : product.price;
+            
             return `
                 <div class="product-card" data-id="${product.id}">
                     <div class="product-info">
                         <h3 class="product-name">${nameDisplay}</h3>
                         <p class="product-category">${product.category}</p>
                         <div class="product-details">
-                            <span class="product-price">₹${product.price.toFixed(2)}</span>
+                            <span class="product-price">Rs.${displayPrice.toFixed(2)}</span>
                             <span class="product-stock">Stock: ${product.stock}</span>
                         </div>
-                        ${product.minPrice > 0 || product.maxPrice > 0 ? 
-                            `<div style="font-size: 11px; color: #666; margin-top: 5px;">
-                                ${product.minPrice > 0 ? `Min: ₹${product.minPrice.toFixed(2)}` : ''}
-                                ${product.minPrice > 0 && product.maxPrice > 0 ? ' - ' : ''}
-                                ${product.maxPrice > 0 ? `Max: ₹${product.maxPrice.toFixed(2)}` : ''}
-                            </div>` : ''}
+                        ${minPrice > 0 || maxPrice > 0 ? 
+                            `<div style="font-size: 11px; color: #667eea; margin-top: 5px; font-weight: 600;">
+                                ${categoryLabel}: ${minPrice > 0 ? `Rs.${minPrice.toFixed(2)}` : ''}${minPrice > 0 && maxPrice > 0 ? ' - ' : ''}${maxPrice > 0 ? `Rs.${maxPrice.toFixed(2)}` : ''}
+                            </div>` : 
+                            (displayPrice > 0 ? `<div style="font-size: 11px; color: #666; margin-top: 5px;">Price: Rs.${displayPrice.toFixed(2)}</div>` : '')}
                     </div>
                     <button class="btn btn-add" onclick="addToCart(${product.id})" ${product.stock === 0 ? 'disabled' : ''}>
                         ${product.stock === 0 ? 'Out of Stock' : 'Add to Cart'}
@@ -887,38 +980,37 @@ function showPriceModal(product) {
     productName.textContent = product.name;
     customPriceInput.value = product.price.toFixed(2);
     
-    // Build price options
+    // Build price options - show only selected category prices
     let optionsHTML = '';
-    
-    // Regular price option
-    optionsHTML += `
-        <div class="price-option ${selectedPrice === product.price ? 'selected' : ''}" 
-             onclick="selectPrice(${product.price})">
-            <div class="price-option-label">Regular Price</div>
-            <div class="price-option-value">₹${product.price.toFixed(2)}</div>
-        </div>
-    `;
+    const categoryLabel = product.categoryLabel || selectedPriceCategory.charAt(0).toUpperCase() + selectedPriceCategory.slice(1);
     
     // Min price option (if available)
-    if (product.minPrice && product.minPrice > 0) {
+    if (product.minPrice > 0) {
         optionsHTML += `
             <div class="price-option ${selectedPrice === product.minPrice ? 'selected' : ''}" 
                  onclick="selectPrice(${product.minPrice})">
-                <div class="price-option-label">Min Price</div>
-                <div class="price-option-value">$${product.minPrice.toFixed(2)}</div>
+                <div class="price-option-label">${categoryLabel} Min Price</div>
+                <div class="price-option-value">Rs.${product.minPrice.toFixed(2)}</div>
             </div>
         `;
     }
     
-    // Max price option (if available)
-    if (product.maxPrice && product.maxPrice > 0) {
+    // Max price option (if available and different from min)
+    if (product.maxPrice > 0 && Math.abs(product.maxPrice - product.minPrice) > 0.01) {
         optionsHTML += `
             <div class="price-option ${selectedPrice === product.maxPrice ? 'selected' : ''}" 
                  onclick="selectPrice(${product.maxPrice})">
-                <div class="price-option-label">Max Price</div>
-                <div class="price-option-value">$${product.maxPrice.toFixed(2)}</div>
+                <div class="price-option-label">${categoryLabel} Max Price</div>
+                <div class="price-option-value">Rs.${product.maxPrice.toFixed(2)}</div>
             </div>
         `;
+    }
+    
+    // If only one price available, don't show modal, just add directly
+    if (product.minPrice > 0 && (!product.maxPrice || Math.abs(product.maxPrice - product.minPrice) < 0.01)) {
+        addToCartWithPrice(product.id, product.minPrice);
+        closePriceModal();
+        return;
     }
     
     priceOptions.innerHTML = optionsHTML;
@@ -981,7 +1073,7 @@ function selectPrice(price) {
     // Update selected state in UI
     document.querySelectorAll('.price-option').forEach(option => {
         option.classList.remove('selected');
-        const optionPrice = parseFloat(option.querySelector('.price-option-value').textContent.replace('₹', '').trim());
+        const optionPrice = parseFloat(option.querySelector('.price-option-value').textContent.replace('Rs.', '').trim());
         if (Math.abs(optionPrice - price) < 0.01) {
             option.classList.add('selected');
         }
@@ -1044,11 +1136,11 @@ function addToCartWithPrice(productId, price) {
     }
 
     updateCart();
-    const priceMsg = Math.abs(price - product.price) > 0.01 ? ` at ₹${price.toFixed(2)}` : '';
+    const priceMsg = Math.abs(price - product.price) > 0.01 ? ` at Rs.${price.toFixed(2)}` : '';
     showNotification(`${product.name} added to cart${priceMsg}`, 'success');
 }
 
-// Add to cart (original function - now checks for min/max price)
+// Add to cart (original function - now uses selected price category)
 function addToCart(productId) {
     const product = products.find(p => p.id === productId);
     if (!product) return;
@@ -1058,14 +1150,43 @@ function addToCart(productId) {
         return;
     }
 
-    // If product has min/max price, show price selection modal
-    if ((product.minPrice && product.minPrice > 0) || (product.maxPrice && product.maxPrice > 0)) {
-        showPriceModal(product);
+    // Get prices based on selected category
+    let minPrice = 0;
+    let maxPrice = 0;
+    let categoryLabel = '';
+    
+    if (selectedPriceCategory === 'parchon') {
+        minPrice = product.parchonMinPrice || 0;
+        maxPrice = product.parchonMaxPrice || 0;
+        categoryLabel = 'Parchon';
+    } else if (selectedPriceCategory === 'gatta') {
+        minPrice = product.gattaMinPrice || 0;
+        maxPrice = product.gattaMaxPrice || 0;
+        categoryLabel = 'Gatta';
+    } else if (selectedPriceCategory === 'wholesale') {
+        minPrice = product.wholesaleMinPrice || 0;
+        maxPrice = product.wholesaleMaxPrice || 0;
+        categoryLabel = 'Wholesale';
+    }
+    
+    // If product has min and max price for selected category, show price selection modal
+    if (minPrice > 0 && maxPrice > 0 && Math.abs(maxPrice - minPrice) > 0.01) {
+        // Update product object temporarily to show only selected category prices
+        const categoryProduct = {
+            ...product,
+            minPrice: minPrice,
+            maxPrice: maxPrice,
+            price: minPrice, // Default to min price
+            selectedCategory: selectedPriceCategory,
+            categoryLabel: categoryLabel
+        };
+        showPriceModal(categoryProduct);
         return;
     }
-
-    // Otherwise, add with regular price
-    addToCartWithPrice(productId, product.price);
+    
+    // Otherwise, add with min price or default price
+    const finalPrice = minPrice > 0 ? minPrice : product.price;
+    addToCartWithPrice(productId, finalPrice);
 }
 
 // Make functions available globally
@@ -1146,8 +1267,8 @@ function updateCart() {
         // Check if this item has a custom price
         const hasCustomPrice = item.customPrice && item.customPrice !== item.originalPrice;
         const priceDisplay = hasCustomPrice ? 
-            `<p>₹${item.price.toFixed(2)} each <span style="color: #ff9800; font-size: 0.85em;">(Custom)</span></p>` :
-            `<p>₹${item.price.toFixed(2)} each</p>`;
+            `<p>Rs.${item.price.toFixed(2)} each <span style="color: #ff9800; font-size: 0.85em;">(Custom)</span></p>` :
+            `<p>Rs.${item.price.toFixed(2)} each</p>`;
         
         // Use a unique key for items with same ID but different prices
         const itemKey = hasCustomPrice ? `${item.id}_${item.price}_${index}` : item.id;
@@ -1165,7 +1286,7 @@ function updateCart() {
                 <button class="btn-remove" onclick="removeFromCartByIndex(${index})">×</button>
             </div>
             <div class="cart-item-total">
-                ₹${(item.price * item.quantity).toFixed(2)}
+                Rs.${(item.price * item.quantity).toFixed(2)}
             </div>
         </div>
     `;
@@ -1180,9 +1301,9 @@ function updateSummary() {
     const tax = subtotal * 0.10; // 10% tax
     const total = subtotal + tax;
 
-    subtotalEl.textContent = `₹${subtotal.toFixed(2)}`;
-    taxEl.textContent = `₹${tax.toFixed(2)}`;
-    totalEl.textContent = `₹${total.toFixed(2)}`;
+    subtotalEl.textContent = `Rs.${subtotal.toFixed(2)}`;
+    taxEl.textContent = `Rs.${tax.toFixed(2)}`;
+    totalEl.textContent = `Rs.${total.toFixed(2)}`;
 }
 
 // Clear cart
@@ -1221,7 +1342,7 @@ function selectLanguage(language) {
 
 // Proceed with checkout after language selection
 function proceedWithCheckout() {
-    const total = parseFloat(totalEl.textContent.replace('₹', '').replace('Rs.', '').trim());
+    const total = parseFloat(totalEl.textContent.replace('Rs.', '').replace('Rs.', '').trim());
     const receipt = generateReceipt(selectedReceiptLanguage);
     
     // Show receipt in a new window or print
@@ -1319,8 +1440,8 @@ function generateReceipt(language = 'english') {
                         <tr>
                             <td>${itemName}</td>
                             <td>${item.quantity}</td>
-                            <td>₹${item.price.toFixed(2)}</td>
-                            <td>₹${(item.price * item.quantity).toFixed(2)}</td>
+                            <td>Rs.${item.price.toFixed(2)}</td>
+                            <td>Rs.${(item.price * item.quantity).toFixed(2)}</td>
                         </tr>
                     `;
                     }).join('')}
@@ -1328,15 +1449,15 @@ function generateReceipt(language = 'english') {
                 <tfoot>
                     <tr>
                         <td colspan="3" class="right">${t.subtotal}:</td>
-                        <td>₹${subtotal.toFixed(2)}</td>
+                        <td>Rs.${subtotal.toFixed(2)}</td>
                     </tr>
                     <tr>
                         <td colspan="3" class="right">${t.tax}:</td>
-                        <td>₹${tax.toFixed(2)}</td>
+                        <td>Rs.${tax.toFixed(2)}</td>
                     </tr>
                     <tr class="total">
                         <td colspan="3" class="right">${t.total}:</td>
-                        <td>₹${total.toFixed(2)}</td>
+                        <td>Rs.${total.toFixed(2)}</td>
                     </tr>
                 </tfoot>
             </table>

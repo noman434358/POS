@@ -11,6 +11,14 @@
         <header class="header">
             <h1>Point of Sale System</h1>
             <div class="header-controls">
+                <div class="price-category-selector">
+                    <label for="priceCategory" style="margin-right: 10px; font-weight: 600;">Price Category:</label>
+                    <select id="priceCategory" class="category-select">
+                        <option value="parchon">Parchon</option>
+                        <option value="gatta">Gatta</option>
+                        <option value="wholesale">Wholesale</option>
+                    </select>
+                </div>
                 <button id="refreshBtn" class="btn btn-secondary">Refresh Products</button>
                 <input type="file" id="fileInput" accept=".xlsx,.xls" style="display: none;">
                 <button id="fileBtn" class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">Choose Local File</button>
@@ -40,15 +48,15 @@
                 <div class="cart-summary">
                     <div class="summary-row">
                         <span>Subtotal:</span>
-                        <span id="subtotal">₹0.00</span>
+                        <span id="subtotal">Rs.0.00</span>
                     </div>
                     <div class="summary-row">
                         <span>Tax (10%):</span>
-                        <span id="tax">₹0.00</span>
+                        <span id="tax">Rs.0.00</span>
                     </div>
                     <div class="summary-row total">
                         <span>Total:</span>
-                        <span id="total">₹0.00</span>
+                        <span id="total">Rs.0.00</span>
                     </div>
                     <button id="checkoutBtn" class="btn btn-success btn-large">Checkout</button>
                 </div>
