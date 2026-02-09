@@ -295,6 +295,12 @@ function processExcelData(arrayBuffer) {
                            row.SKU || row.sku || 
                            row['Product Code'] || row['product code'] || '';
             
+            // Unit type (Liter, Kg, Pack, etc.)
+            const unit = String(row.Unit || row.unit || 
+                               row['Unit Type'] || row['unit type'] || 
+                               row.Type || row.type || 
+                               'Kg').trim();
+            
             // New price structure: Parchon, Gatta, Wholesale (single prices)
             const parchonPrice = parseFloat(row['Parchon Price'] || row['parchon price'] || 
                                            row['ParchonPrice'] || row['parchonprice'] || 0);
@@ -356,6 +362,7 @@ function processExcelData(arrayBuffer) {
                 barcode: String(barcode).trim(),
                 description: description || (row.Description || row.description || ''),
                 nameUrdu: String(nameUrdu).trim(),
+                unit: unit, // Unit type: Liter, Kg, Pack, etc.
                 // New price structure (single prices)
                 parchonPrice: parchonPrice,
                 gattaPrice: gattaPrice,
@@ -909,6 +916,9 @@ let selectedProductForPrice = null;
 let selectedPrice = null;
 let editingCartItemIndex = null; // Track if we're editing a cart item (null = adding new, number = editing existing)
 
+// Quantity input modal state
+let editingQuantityItemIndex = null;
+
 // Show price selection modal with all price options
 // If cartItemIndex is provided, we're editing an existing cart item
 function showPriceModal(product, cartItemIndex = null) {
@@ -1024,11 +1034,15 @@ if (typeof window.onclick === 'function') {
 window.onclick = function(event) {
     const priceModal = document.getElementById('priceModal');
     const languageModal = document.getElementById('languageModal');
+    const quantityModal = document.getElementById('quantityModal');
     if (event.target === priceModal) {
         closePriceModal();
     }
     if (event.target === languageModal) {
         closeLanguageModal();
+    }
+    if (event.target === quantityModal) {
+        closeQuantityModal();
     }
 }
 
@@ -1111,7 +1125,8 @@ function addToCartWithPrice(productId, price) {
             price: price, // Use the selected/custom price
             customPrice: isCustomPrice ? price : undefined, // Track if this is a custom price
             originalPrice: product.price, // Keep original for reference
-            quantity: 1
+            quantity: 1,
+            unit: product.unit || 'Kg' // Preserve unit type
         });
     }
 
@@ -1169,13 +1184,103 @@ function updateQuantity(productId, change) {
     updateCart();
 }
 
+// Format quantity for display based on product unit
+function formatQuantity(quantity, unit = 'Kg') {
+    if (quantity <= 0) {
+        return '0';
+    }
+    
+    // Normalize unit name (handle variations)
+    const normalizedUnit = String(unit).trim();
+    const unitLower = normalizedUnit.toLowerCase();
+    
+    // Handle different unit types
+    if (unitLower === 'kg' || unitLower === 'kilogram' || unitLower === 'kgs') {
+        // For Kg: show as kg or gm
+        if (quantity >= 1) {
+            return `${quantity.toFixed(quantity % 1 === 0 ? 0 : 2)} kg`;
+        } else {
+            const grams = Math.round(quantity * 1000);
+            return `${grams} gm`;
+        }
+    } else if (unitLower === 'liter' || unitLower === 'litre' || unitLower === 'l' || unitLower === 'liters' || unitLower === 'litres') {
+        // For Liter: show as Liter or ml
+        if (quantity >= 1) {
+            return `${quantity.toFixed(quantity % 1 === 0 ? 0 : 2)} Liter`;
+        } else {
+            const ml = Math.round(quantity * 1000);
+            return `${ml} ml`;
+        }
+    } else if (unitLower === 'pack' || unitLower === 'packs' || unitLower === 'pcs' || unitLower === 'piece' || unitLower === 'pieces') {
+        // For Pack/Piece: show as whole number
+        return `${Math.round(quantity)} ${normalizedUnit}`;
+    } else {
+        // Default: show with unit
+        return `${quantity.toFixed(quantity % 1 === 0 ? 0 : 2)} ${normalizedUnit}`;
+    }
+}
+
+// Parse quantity input based on product unit (handles "2.5 kg", "500 gm", "2.5 Liter", "500 ml", "3 Pack", etc.)
+function parseQuantity(input, unit = 'Kg') {
+    if (!input || typeof input !== 'string') {
+        return parseFloat(input) || 0;
+    }
+    
+    const trimmed = input.trim().toLowerCase();
+    const unitLower = String(unit).toLowerCase();
+    
+    // Try to parse as number first
+    const numberMatch = trimmed.match(/^([\d.]+)/);
+    if (!numberMatch) {
+        return 0;
+    }
+    
+    const value = parseFloat(numberMatch[1]);
+    if (isNaN(value)) {
+        return 0;
+    }
+    
+    // Check for unit in input
+    if (trimmed.includes('gm') || trimmed.includes('gram')) {
+        // Convert grams to kg
+        return value / 1000;
+    } else if (trimmed.includes('ml') || trimmed.includes('milliliter') || trimmed.includes('millilitre')) {
+        // Convert ml to Liter
+        return value / 1000;
+    } else if (trimmed.includes('kg') || trimmed.includes('kilogram')) {
+        // Already in kg
+        return value;
+    } else if (trimmed.includes('liter') || trimmed.includes('litre') || trimmed.includes('l ')) {
+        // Already in Liter
+        return value;
+    } else if (trimmed.includes('pack') || trimmed.includes('pcs') || trimmed.includes('piece')) {
+        // Pack/Piece - return as whole number
+        return Math.round(value);
+    } else {
+        // No unit specified, return value as-is (will be formatted based on product unit)
+        return value;
+    }
+}
+
 // Update quantity by index (handles items with custom prices)
 function updateQuantityByIndex(itemIndex, change) {
     if (itemIndex < 0 || itemIndex >= cart.length) return;
     
     const cartItem = cart[itemIndex];
     const product = products.find(p => p.id === cartItem.id);
-    const newQuantity = cartItem.quantity + change;
+    const unit = (cartItem.unit || product.unit || 'Kg').toLowerCase();
+    
+    // Determine increment step based on unit type
+    let step = change;
+    if (unit === 'pack' || unit === 'pcs' || unit === 'piece' || unit === 'packs' || unit === 'pieces') {
+        // For Pack/Piece: increment by 1
+        step = change > 0 ? 1 : -1;
+    } else {
+        // For Kg/Liter: increment by 0.1 (100 gm or 100 ml)
+        step = change > 0 ? 0.1 : -0.1;
+    }
+    
+    const newQuantity = Math.max(0, cartItem.quantity + step);
 
     if (newQuantity <= 0) {
         cart.splice(itemIndex, 1);
@@ -1183,12 +1288,16 @@ function updateQuantityByIndex(itemIndex, change) {
         return;
     }
 
-    if (newQuantity > product.stock) {
+    if (product.stock > 0 && newQuantity > product.stock) {
         showNotification('Not enough stock available', 'error');
         return;
     }
 
     cartItem.quantity = newQuantity;
+    // Ensure unit is preserved
+    if (!cartItem.unit) {
+        cartItem.unit = product.unit || 'Kg';
+    }
     updateCart();
 }
 
@@ -1217,6 +1326,122 @@ function editCartItemPrice(itemIndex) {
     showPriceModal(product, itemIndex);
 }
 
+// Edit cart item quantity
+function editQuantity(itemIndex) {
+    if (itemIndex < 0 || itemIndex >= cart.length) return;
+    
+    const cartItem = cart[itemIndex];
+    const product = products.find(p => p.id === cartItem.id);
+    
+    if (!product) {
+        showNotification('Product not found', 'error');
+        return;
+    }
+    
+    editingQuantityItemIndex = itemIndex;
+    
+    const modal = document.getElementById('quantityModal');
+    const productName = document.getElementById('quantityModalProductName');
+    const quantityInput = document.getElementById('quantityInput');
+    const unit = product.unit || 'Kg';
+    
+    productName.textContent = `${product.name} (Unit: ${unit})`;
+    // Pre-fill with current quantity in readable format
+    quantityInput.value = formatQuantity(cartItem.quantity, unit);
+    
+    // Update placeholder and help text based on unit
+    const unitLower = unit.toLowerCase();
+    let placeholder = '';
+    let helpText = '';
+    
+    if (unitLower === 'kg' || unitLower === 'kilogram') {
+        placeholder = 'e.g., 2.5 kg or 500 gm';
+        helpText = 'Examples: 2.5 kg, 500 gm, or just 2';
+    } else if (unitLower === 'liter' || unitLower === 'litre' || unitLower === 'l') {
+        placeholder = 'e.g., 2.5 Liter or 500 ml';
+        helpText = 'Examples: 2.5 Liter, 500 ml, or just 2';
+    } else if (unitLower === 'pack' || unitLower === 'pcs' || unitLower === 'piece') {
+        placeholder = 'e.g., 3 Pack or 5';
+        helpText = `Examples: 3 ${unit}, 5 ${unit}, or just 3`;
+    } else {
+        placeholder = `e.g., 2.5 ${unit} or 2`;
+        helpText = `Examples: 2.5 ${unit}, 2 ${unit}, or just 2`;
+    }
+    
+    quantityInput.placeholder = placeholder;
+    const helpTextEl = modal.querySelector('.modal-body small');
+    if (helpTextEl) {
+        helpTextEl.textContent = helpText;
+    }
+    
+    // Remove old event listener if exists
+    quantityInput.onkeypress = null;
+    
+    // Add Enter key support
+    quantityInput.onkeypress = function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            confirmQuantitySelection();
+        }
+    };
+    
+    modal.style.display = 'block';
+    // Focus and select the input
+    setTimeout(() => {
+        quantityInput.focus();
+        quantityInput.select();
+    }, 100);
+}
+
+// Close quantity modal
+function closeQuantityModal() {
+    const modal = document.getElementById('quantityModal');
+    modal.style.display = 'none';
+    editingQuantityItemIndex = null;
+    const quantityInput = document.getElementById('quantityInput');
+    if (quantityInput) quantityInput.value = '';
+}
+
+// Confirm quantity selection
+function confirmQuantitySelection() {
+    if (editingQuantityItemIndex === null || editingQuantityItemIndex < 0 || editingQuantityItemIndex >= cart.length) {
+        return;
+    }
+    
+    const quantityInput = document.getElementById('quantityInput');
+    const inputValue = quantityInput.value.trim();
+    
+    if (!inputValue) {
+        showNotification('Please enter a quantity', 'error');
+        return;
+    }
+    
+    const cartItem = cart[editingQuantityItemIndex];
+    const product = products.find(p => p.id === cartItem.id);
+    const unit = product.unit || 'Kg';
+    
+    const parsedQuantity = parseQuantity(inputValue, unit);
+    
+    if (parsedQuantity <= 0) {
+        showNotification('Quantity must be greater than 0', 'error');
+        return;
+    }
+    
+    if (product.stock > 0 && parsedQuantity > product.stock) {
+        showNotification('Not enough stock available', 'error');
+        return;
+    }
+    
+    cartItem.quantity = parsedQuantity;
+    // Ensure unit is preserved
+    if (!cartItem.unit) {
+        cartItem.unit = unit;
+    }
+    updateCart();
+    showNotification(`Quantity updated to ${formatQuantity(parsedQuantity, unit)}`, 'success');
+    closeQuantityModal();
+}
+
 // Update cart display
 function updateCart() {
     if (cart.length === 0) {
@@ -1243,7 +1468,7 @@ function updateCart() {
             </div>
             <div class="cart-item-controls">
                 <button class="btn-quantity" onclick="updateQuantityByIndex(${index}, -1)">-</button>
-                <span class="quantity">${item.quantity}</span>
+                <span class="quantity" onclick="editQuantity(${index})" style="cursor: pointer; padding: 5px; border-radius: 4px; min-width: 80px; user-select: none;" title="Click to edit quantity">${formatQuantity(item.quantity, item.unit || 'Kg')}</span>
                 <button class="btn-quantity" onclick="updateQuantityByIndex(${index}, 1)">+</button>
                 <button class="btn-edit" onclick="editCartItemPrice(${index})" title="Change Price">✎</button>
                 <button class="btn-remove" onclick="removeFromCartByIndex(${index})">×</button>
@@ -1391,7 +1616,7 @@ function generateReceipt(language = 'english') {
                         return `
                         <tr>
                             <td>${itemName}</td>
-                            <td>${item.quantity}</td>
+                            <td>${formatQuantity(item.quantity, item.unit || 'Kg')}</td>
                             <td>Rs.${item.price.toFixed(2)}</td>
                             <td>Rs.${(item.price * item.quantity).toFixed(2)}</td>
                         </tr>
@@ -1428,6 +1653,9 @@ window.updateQuantity = updateQuantity;
 window.updateQuantityByIndex = updateQuantityByIndex;
 window.removeFromCartByIndex = removeFromCartByIndex;
 window.editCartItemPrice = editCartItemPrice;
+window.editQuantity = editQuantity;
+window.closeQuantityModal = closeQuantityModal;
+window.confirmQuantitySelection = confirmQuantitySelection;
 window.selectLanguage = selectLanguage;
 window.closeLanguageModal = closeLanguageModal;
 

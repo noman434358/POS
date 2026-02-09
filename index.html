@@ -95,6 +95,28 @@
                 </div>
             </div>
         </div>
+        
+        <!-- Quantity Input Modal -->
+        <div id="quantityModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Enter Quantity</h3>
+                    <span class="modal-close" onclick="closeQuantityModal()">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <p id="quantityModalProductName" style="font-weight: 600; margin-bottom: 15px;"></p>
+                    <div style="margin-bottom: 15px;">
+                        <label for="quantityInput" style="display: block; margin-bottom: 8px; font-weight: 600;">Enter quantity:</label>
+                        <input type="text" id="quantityInput" placeholder="e.g., 2.5 kg or 500 gm" class="custom-price-input" style="width: 100%;">
+                        <small style="color: #666; font-size: 12px; margin-top: 5px; display: block;">Examples: 2.5 kg, 500 gm, 1.5 kgs, or just 2</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button onclick="closeQuantityModal()" class="btn btn-secondary">Cancel</button>
+                    <button onclick="confirmQuantitySelection()" class="btn btn-primary">Update Quantity</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="renderer.js"></script>
