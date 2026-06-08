@@ -1,47 +1,177 @@
 // Use modules exposed via preload script
 if (!window.electronAPI) {
-    console.error('electronAPI not available! Check preload script.');
-    document.body.innerHTML = '<div style="padding: 20px; text-align: center;"><h1>Error</h1><p>Failed to load required modules. Please restart the application.</p><p style="color: #666; font-size: 12px;">If the problem persists, run: npm install</p></div>';
+    console.error('electronAPI not available!');
+    document.body.innerHTML = '<div style="padding:20px;text-align:center"><h1>Error</h1><p>Failed to load required modules. Please restart the application.</p></div>';
 }
 
-if (window.electronAPI && window.electronAPI.error) {
-    console.error('Preload error:', window.electronAPI.error);
-    document.body.innerHTML = `<div style="padding: 20px; text-align: center;"><h1>Module Loading Error</h1><p>${window.electronAPI.error}</p><p style="color: #666; font-size: 12px;">Please run: npm install</p></div>`;
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+if (window.electronAPI?.error) {
+    document.body.innerHTML = `<div style="padding:20px;text-align:center"><h1>Module Loading Error</h1><p>${escapeHtml(window.electronAPI.error)}</p></div>`;
 }
 
 const axios = window.electronAPI?.axios;
 const XLSX = window.electronAPI?.XLSX;
 
 if (!axios || !XLSX) {
-    console.error('Modules not loaded:', { axios: !!axios, XLSX: !!XLSX });
-    console.error('electronAPI contents:', Object.keys(window.electronAPI || {}));
-    document.body.innerHTML = '<div style="padding: 20px; text-align: center;"><h1>Error</h1><p>Required modules (axios, XLSX) not loaded.</p><p style="color: #666; font-size: 12px;">Please run: npm install</p></div>';
+    document.body.innerHTML = '<div style="padding:20px;text-align:center"><h1>Error</h1><p>Required modules (axios, XLSX) not loaded. Please run: npm install</p></div>';
 }
 
-// Verify axios has the get method
-if (axios && typeof axios.get !== 'function') {
-    console.error('axios.get is not a function!');
-    console.error('axios type:', typeof axios);
-    console.error('axios keys:', Object.keys(axios || {}));
-    console.error('axios.get:', axios.get);
-    console.error('Full axios object:', axios);
-}
-
+// ==================== STATE ====================
 let products = [];
 let cart = [];
 let excelUrl = '';
+let transactions = [];
+let customers = [];
+let stockOverrides = {}; // { productId: totalQuantitySold }
+let viewingTransactionIndex = null;
 
-// Default Excel URL - Google Sheets
 const DEFAULT_EXCEL_URL = 'https://docs.google.com/spreadsheets/d/1L4iygFD3mB7jlJNAh97eeBfxkC7VBVYdwkH6Rb7SCMQ/edit?gid=1799151543#gid=1799151543';
 
-// DOM Elements (will be initialized in DOMContentLoaded)
+// ==================== SETTINGS ====================
+let settings = {
+    storeName: 'My Store',
+    storeAddress: '',
+    storePhone: '',
+    defaultPriceTier: 'parchon',
+    lowStockThreshold: 5,
+    darkMode: false
+};
+
+function loadSettings() {
+    try {
+        const saved = localStorage.getItem('pos_settings');
+        if (saved) settings = { ...settings, ...JSON.parse(saved) };
+    } catch (e) { /* ignore */ }
+}
+
+function saveSettings() {
+    localStorage.setItem('pos_settings', JSON.stringify(settings));
+}
+
+function applyDarkMode() {
+    document.body.classList.toggle('dark-mode', settings.darkMode);
+    const btn = document.getElementById('darkModeBtn');
+    if (btn) btn.textContent = settings.darkMode ? '☀️' : '🌙';
+    const toggle = document.getElementById('settingsDarkMode');
+    if (toggle) toggle.checked = settings.darkMode;
+}
+
+function toggleDarkMode() {
+    settings.darkMode = !settings.darkMode;
+    applyDarkMode();
+    saveSettings();
+}
+
+function populateSettingsForm() {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
+    set('settingsStoreName', settings.storeName);
+    set('settingsStoreAddress', settings.storeAddress);
+    set('settingsStorePhone', settings.storePhone);
+    set('settingsDefaultPriceTier', settings.defaultPriceTier);
+    set('settingsLowStockThreshold', settings.lowStockThreshold);
+    const dm = document.getElementById('settingsDarkMode');
+    if (dm) dm.checked = settings.darkMode;
+}
+
+function saveSettingsFromForm() {
+    const get = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    settings.storeName = get('settingsStoreName') || 'My Store';
+    settings.storeAddress = get('settingsStoreAddress');
+    settings.storePhone = get('settingsStorePhone');
+    settings.defaultPriceTier = get('settingsDefaultPriceTier') || 'parchon';
+    settings.lowStockThreshold = parseInt(get('settingsLowStockThreshold')) || 5;
+    const dm = document.getElementById('settingsDarkMode');
+    settings.darkMode = dm ? dm.checked : false;
+    saveSettings();
+    applyDarkMode();
+    const nameEl = document.getElementById('headerStoreName');
+    if (nameEl) nameEl.textContent = settings.storeName;
+    showNotification('Settings saved!', 'success');
+}
+
+// ==================== STOCK TRACKING ====================
+function loadStockOverrides() {
+    try {
+        const saved = localStorage.getItem('pos_stock_overrides');
+        if (saved) stockOverrides = JSON.parse(saved);
+    } catch (e) { stockOverrides = {}; }
+}
+
+function saveStockOverrides() {
+    localStorage.setItem('pos_stock_overrides', JSON.stringify(stockOverrides));
+}
+
+function resetStockOverrides() {
+    if (!confirm('This will reset all stock back to original Excel values. Continue?')) return;
+    stockOverrides = {};
+    saveStockOverrides();
+    displayProducts(products);
+    showNotification('Stock reset to Excel values', 'success');
+}
+
+function getEffectiveStock(product) {
+    const sold = stockOverrides[product.id] || 0;
+    return Math.max(0, product.stock - sold);
+}
+
+function decrementStockForCart(cartSnapshot) {
+    cartSnapshot.forEach(item => {
+        stockOverrides[item.id] = (stockOverrides[item.id] || 0) + item.quantity;
+    });
+    saveStockOverrides();
+}
+
+// ==================== FILE STORAGE (IPC) ====================
+const storage = {
+    read: async (filename) => {
+        if (!window.electronAPI?.storage) return null;
+        return window.electronAPI.storage.read(filename);
+    },
+    write: async (filename, data) => {
+        if (!window.electronAPI?.storage) return false;
+        return window.electronAPI.storage.write(filename, data);
+    }
+};
+
+async function loadTransactions() {
+    const data = await storage.read('transactions.json');
+    if (Array.isArray(data)) transactions = data;
+}
+
+async function persistTransaction(tx) {
+    transactions.unshift(tx); // newest first
+    await storage.write('transactions.json', transactions);
+}
+
+async function loadCustomers() {
+    const data = await storage.read('customers.json');
+    if (Array.isArray(data)) customers = data;
+}
+
+async function ensureCustomer(name, phone) {
+    if (!name) return;
+    const exists = customers.find(c => c.name === name);
+    if (!exists) {
+        customers.push({ id: Date.now(), name, phone: phone || '', firstSeen: new Date().toISOString() });
+        await storage.write('customers.json', customers);
+    }
+}
+
+// ==================== DOM REFS ====================
 let productsGrid, cartItems, searchInput, loadBtn, refreshBtn, excelUrlInput;
 let fileInput, fileBtn, clearCartBtn, checkoutBtn;
-let totalEl, notification;
+let totalEl, subtotalEl, notification;
 
-// Initialize
-document.addEventListener('DOMContentLoaded', () => {
-    // Get all DOM elements
+// ==================== INIT ====================
+document.addEventListener('DOMContentLoaded', async () => {
     productsGrid = document.getElementById('productsGrid');
     cartItems = document.getElementById('cartItems');
     searchInput = document.getElementById('searchInput');
@@ -53,1601 +183,1243 @@ document.addEventListener('DOMContentLoaded', () => {
     clearCartBtn = document.getElementById('clearCartBtn');
     checkoutBtn = document.getElementById('checkoutBtn');
     totalEl = document.getElementById('total');
+    subtotalEl = document.getElementById('subtotal');
     notification = document.getElementById('notification');
-    
-    // Verify all critical elements exist
-    if (!productsGrid || !excelUrlInput || !fileInput || !fileBtn) {
-        console.error('Required DOM elements not found!', {
-            productsGrid: !!productsGrid,
-            excelUrlInput: !!excelUrlInput,
-            fileInput: !!fileInput,
-            fileBtn: !!fileBtn
-        });
-        if (productsGrid) {
-            productsGrid.innerHTML = '<div class="error">Error: Required elements not found. Please refresh the page.</div>';
-        }
-        return;
-    }
-    
-    console.log('All DOM elements loaded successfully');
-    
-    // Clear old URLs from localStorage and use the latest Google Sheets URL
+
+    // Load persisted data
+    loadSettings();
+    loadStockOverrides();
+    await loadTransactions();
+    await loadCustomers();
+
+    // Apply settings to UI
+    applyDarkMode();
+    const nameEl = document.getElementById('headerStoreName');
+    if (nameEl) nameEl.textContent = settings.storeName;
+
+    // URL init
     const storedUrl = localStorage.getItem('excelUrl');
-    // If stored URL is old (OneDrive or old Google Sheets), use default URL instead
     const oldSheetIds = [
-        '1n4Qvos_RZLgex2pxisiJGYjgneDbmujRkJuRE-W0bEM',  // Old sheet 1
-        '1mBy447WJ_QUle4MUA-GhZplP8UMowmuSJj6awjki5yQ'   // Old sheet 2
+        '1n4Qvos_RZLgex2pxisiJGYjgneDbmujRkJuRE-W0bEM',
+        '1mBy447WJ_QUle4MUA-GhZplP8UMowmuSJj6awjki5yQ'
     ];
     const isOldUrl = storedUrl && (
-        storedUrl.includes('onedrive') || 
+        storedUrl.includes('onedrive') ||
         storedUrl.includes('excel.cloud.microsoft') ||
-        oldSheetIds.some(oldId => storedUrl.includes(oldId))
+        oldSheetIds.some(id => storedUrl.includes(id))
     );
-    
-    if (isOldUrl) {
-        console.log('[Init] Clearing old URL from storage');
-        localStorage.removeItem('excelUrl');
-        excelUrlInput.value = DEFAULT_EXCEL_URL;
-    } else {
-        excelUrlInput.value = storedUrl || DEFAULT_EXCEL_URL;
-    }
+    excelUrlInput.value = (isOldUrl || !storedUrl) ? DEFAULT_EXCEL_URL : storedUrl;
     excelUrl = excelUrlInput.value;
-    console.log('[Init] Using URL:', excelUrl);
-    
-    // Set up event listeners
-    if (loadBtn) loadBtn.addEventListener('click', loadExcel);
+
+    // Event listeners
     if (refreshBtn) refreshBtn.addEventListener('click', loadExcel);
-    
-    // File picker button
+    if (loadBtn) loadBtn.addEventListener('click', loadExcel);
+
     if (fileBtn && fileInput) {
-        fileBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            console.log('File button clicked, opening file picker...');
-            try {
-                fileInput.click();
-            } catch (error) {
-                console.error('Error opening file picker:', error);
-                showNotification('Error opening file picker: ' + error.message, 'error');
-            }
-        });
-        
-        fileInput.addEventListener('change', (e) => {
-            console.log('File selected:', e.target.files[0]?.name);
-            handleFileSelect(e);
-        });
+        fileBtn.addEventListener('click', (e) => { e.preventDefault(); fileInput.click(); });
+        fileInput.addEventListener('change', handleFileSelect);
     }
-    
+
     if (searchInput) {
         searchInput.addEventListener('input', filterProducts);
-        searchInput.addEventListener('keyup', filterProducts); // Also trigger on keyup for better responsiveness
-        console.log('Search input event listener attached');
-    } else {
-        console.error('searchInput element not found!');
+        searchInput.addEventListener('keyup', filterProducts);
+        setupBarcodeScanner();
     }
+
     if (clearCartBtn) clearCartBtn.addEventListener('click', clearCart);
     if (checkoutBtn) checkoutBtn.addEventListener('click', checkout);
-    
-    // Auto-load Excel file on startup
+
+    // Dark mode button
+    const darkBtn = document.getElementById('darkModeBtn');
+    if (darkBtn) darkBtn.addEventListener('click', toggleDarkMode);
+
+    // Discount live update
+    const discountAmount = document.getElementById('discountAmount');
+    const discountType = document.getElementById('discountType');
+    if (discountAmount) discountAmount.addEventListener('input', updateSummary);
+    if (discountType) discountType.addEventListener('change', updateSummary);
+
+    // Nav tabs
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            const panelId = tab.dataset.panel;
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(p => p.style.display = 'none');
+            tab.classList.add('active');
+            const panel = document.getElementById(panelId);
+            if (panel) panel.style.display = 'block';
+            if (panelId === 'reportsPanel') renderReports();
+            if (panelId === 'settingsPanel') populateSettingsForm();
+        });
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', handleGlobalKeydown);
+
+    // Close modals on backdrop click
+    window.addEventListener('click', (e) => {
+        if (e.target === document.getElementById('priceModal')) closePriceModal();
+        if (e.target === document.getElementById('languageModal')) closeLanguageModal();
+        if (e.target === document.getElementById('quantityModal')) closeQuantityModal();
+        if (e.target === document.getElementById('receiptDetailModal')) closeReceiptDetailModal();
+    });
+
     loadExcel();
 });
 
-// Handle local file selection
-function handleFileSelect(event) {
-    console.log('handleFileSelect called', event);
-    const file = event.target.files[0];
-    
-    if (!file) {
-        console.log('No file selected');
-        return;
+// ==================== KEYBOARD SHORTCUTS ====================
+function handleGlobalKeydown(e) {
+    // Escape: close any open modal
+    if (e.key === 'Escape') {
+        closePriceModal();
+        closeLanguageModal();
+        closeQuantityModal();
+        closeReceiptDetailModal();
     }
-
-    console.log('File selected:', file.name, 'Size:', file.size, 'Type:', file.type);
-
-    if (!file.name.match(/\.(xlsx|xls)$/i)) {
-        showNotification('Please select a valid Excel file (.xlsx or .xls)', 'error');
-        productsGrid.innerHTML = '<div class="error">Invalid file type. Please select an Excel file (.xlsx or .xls)</div>';
-        return;
+    // Ctrl+P: print (checkout flow)
+    if (e.ctrlKey && e.key === 'p') {
+        e.preventDefault();
+        if (cart.length > 0) checkout();
     }
-
-    showNotification('Loading products from file...', 'info');
-    productsGrid.innerHTML = '<div class="loading">Loading products from file...<br><small>Reading ' + file.name + '</small></div>';
-
-    const reader = new FileReader();
-    
-    reader.onload = function(e) {
-        try {
-            console.log('File read successfully, size:', e.target.result.byteLength);
-            const data = new Uint8Array(e.target.result);
-            console.log('Processing Excel data...');
-            processExcelData(data);
-        } catch (error) {
-            console.error('Error reading file:', error);
-            showNotification('Error reading file: ' + error.message, 'error');
-            productsGrid.innerHTML = `<div class="error">
-                <p><strong>Failed to read file</strong></p>
-                <p style="font-size: 12px; margin-top: 10px;">${error.message}</p>
-            </div>`;
-        }
-    };
-    
-    reader.onerror = function(error) {
-        console.error('FileReader error:', error);
-        showNotification('Error reading file', 'error');
-        productsGrid.innerHTML = '<div class="error">Failed to read file. Please try selecting the file again.</div>';
-    };
-    
-    reader.onprogress = function(e) {
-        if (e.lengthComputable) {
-            const percentLoaded = Math.round((e.loaded / e.total) * 100);
-            console.log('File reading progress:', percentLoaded + '%');
-        }
-    };
-    
-    try {
-        reader.readAsArrayBuffer(file);
-    } catch (error) {
-        console.error('Error starting file read:', error);
-        showNotification('Error reading file: ' + error.message, 'error');
-        productsGrid.innerHTML = '<div class="error">Failed to read file. Please try again.</div>';
+    // Ctrl+F: focus search
+    if (e.ctrlKey && e.key === 'f') {
+        e.preventDefault();
+        if (searchInput) searchInput.focus();
     }
 }
 
-// Process Excel data (shared between URL and file loading)
+// ==================== BARCODE SCANNER ====================
+let barcodeBuffer = '';
+let barcodeLastTime = 0;
+const BARCODE_SPEED_MS = 60;
+
+function setupBarcodeScanner() {
+    searchInput.addEventListener('keydown', (e) => {
+        const now = Date.now();
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            // Fast input → scanner mode: try barcode lookup first
+            if (now - barcodeLastTime < BARCODE_SPEED_MS * 2 && barcodeBuffer.length > 2) {
+                const barcode = barcodeBuffer.trim();
+                const match = products.find(p => p.barcode && p.barcode === barcode);
+                if (match) {
+                    addToCart(match.id);
+                    searchInput.value = '';
+                    barcodeBuffer = '';
+                    filterProducts();
+                    return;
+                }
+            }
+            // Keyboard Enter: add first visible filtered product
+            const filtered = getFilteredProducts();
+            if (filtered.length > 0) {
+                addToCart(filtered[0].id);
+            }
+            return;
+        }
+        // Track rapid input for barcode scanner detection
+        if (now - barcodeLastTime < BARCODE_SPEED_MS) {
+            if (e.key.length === 1) barcodeBuffer += e.key;
+        } else {
+            barcodeBuffer = e.key.length === 1 ? e.key : '';
+        }
+        barcodeLastTime = now;
+    });
+}
+
+function getFilteredProducts() {
+    if (!searchInput) return products;
+    const term = searchInput.value.toLowerCase().trim();
+    if (!term) return products;
+    return products.filter(p => {
+        return String(p.name || '').toLowerCase().includes(term) ||
+               String(p.nameUrdu || '').toLowerCase().includes(term) ||
+               String(p.category || '').toLowerCase().includes(term) ||
+               String(p.barcode || '').toLowerCase().includes(term);
+    });
+}
+
+// ==================== FILE HANDLING ====================
+function handleFileSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    if (!file.name.match(/\.(xlsx|xls)$/i)) {
+        showNotification('Please select a valid Excel file (.xlsx or .xls)', 'error');
+        return;
+    }
+    showNotification('Loading products from file...', 'info');
+    productsGrid.innerHTML = `<div class="loading">Reading ${escapeHtml(file.name)}...</div>`;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            processExcelData(new Uint8Array(e.target.result));
+        } catch (err) {
+            showNotification('Error reading file: ' + err.message, 'error');
+            productsGrid.innerHTML = `<div class="error">Failed to read file: ${escapeHtml(err.message)}</div>`;
+        }
+    };
+    reader.onerror = () => {
+        showNotification('Error reading file', 'error');
+        productsGrid.innerHTML = '<div class="error">Failed to read file.</div>';
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+// Parse numeric prices from Excel cells that may be numbers, strings, or formatted (commas, currency).
+// Plain parseFloat() often returns NaN for values like "1,234.56" or "Rs. 100", which makes every row fail validation.
+function parsePriceCell(value) {
+    if (value == null || value === '') return 0;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    let s = String(value).trim().replace(/\s+/g, ' ');
+    if (!s) return 0;
+    // Strip common currency / unit noise at start (PKR, Rs., $, etc.)
+    s = s.replace(/^(?:PKR|Rs\.?|RS\.?|USD|EUR|GBP|\$|€|£)\s*/i, '').trim();
+    // Keep digits, separators, minus
+    let t = s.replace(/[^\d.,-]/g, '');
+    if (!t || t === '-') return 0;
+    const lastComma = t.lastIndexOf(',');
+    const lastDot = t.lastIndexOf('.');
+    if (lastComma !== -1 && lastDot !== -1) {
+        // If the rightmost separator is comma, treat comma as decimal (e.g. 1.234,56)
+        if (lastComma > lastDot) {
+            t = t.replace(/\./g, '').replace(',', '.');
+        } else {
+            t = t.replace(/,/g, '');
+        }
+    } else if (lastComma !== -1 && lastDot === -1) {
+        const parts = t.split(',');
+        if (parts.length === 2 && parts[1].length <= 2) {
+            t = parts[0].replace(/\./g, '') + '.' + parts[1];
+        } else {
+            t = t.replace(/,/g, '');
+        }
+    } else {
+        t = t.replace(/,/g, '');
+    }
+    const n = parseFloat(t);
+    return Number.isFinite(n) ? n : 0;
+}
+
+// ==================== EXCEL PROCESSING ====================
 function processExcelData(arrayBuffer) {
     try {
-        console.log('Starting Excel processing, buffer size:', arrayBuffer.length);
         const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        if (!workbook.SheetNames?.length) throw new Error('Excel file contains no sheets');
 
-        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
-            throw new Error('Excel file contains no sheets');
-        }
-
-        const sheetName = workbook.SheetNames[0];
-        console.log('Using sheet:', sheetName);
-        const worksheet = workbook.Sheets[sheetName];
-        
-        // Convert to JSON - try with header row detection
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
         let data = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
-        
-        // If no data, try without header detection
+
         if (data.length === 0) {
-            console.log('No data with header detection, trying raw data...');
             data = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
             if (data.length > 1) {
-                // First row is headers
                 const headers = data[0];
                 data = data.slice(1).map(row => {
                     const obj = {};
-                    headers.forEach((header, index) => {
-                        obj[header] = row[index];
-                    });
+                    headers.forEach((h, i) => { obj[h] = row[i]; });
                     return obj;
                 });
             }
         }
-        
-        console.log('Parsed data rows:', data.length);
-        console.log('First 3 rows:', data.slice(0, 3));
-        console.log('Available columns:', data.length > 0 ? Object.keys(data[0]) : 'No data');
-        
-        if (data.length === 0) {
-            throw new Error('Excel file is empty or contains no data rows');
-        }
-        
-        // Find column names that match our expected columns (case-insensitive, flexible matching)
-        const allColumns = data.length > 0 ? Object.keys(data[0]) : [];
-        console.log('All column names:', allColumns);
-        
-        // Find Urdu name column with flexible matching
-        const urduColumn = allColumns.find(col => 
-            /name.*urdu|urdu.*name/i.test(col) || 
-            col.toLowerCase().includes('urdu')
-        );
-        console.log('Found Urdu column:', urduColumn);
-        
-        // Find English name column
-        const englishColumn = allColumns.find(col => 
-            /name.*english|english.*name/i.test(col) || 
-            (col.toLowerCase().includes('name') && !col.toLowerCase().includes('urdu'))
-        ) || allColumns.find(col => /^name$/i.test(col));
-        console.log('Found English name column:', englishColumn);
-        
-        // Process products - handle both old and new column structures
+
+        if (data.length === 0) throw new Error('Excel file is empty or contains no data rows');
+
+        const allColumns = Object.keys(data[0]);
+
+        const urduColumn = allColumns.find(c => /name.*urdu|urdu.*name/i.test(c) || c.toLowerCase().includes('urdu'));
+        const englishColumn = allColumns.find(c => /name.*english|english.*name/i.test(c) || (c.toLowerCase().includes('name') && !c.toLowerCase().includes('urdu'))) || allColumns.find(c => /^name$/i.test(c));
+        const imageColumn = allColumns.find(c => /image|photo|picture|img/i.test(c));
+
         const rawProducts = data.map((row, index) => {
-            // Try to find English name column (new structure) or Name (old structure)
             let name = '';
             if (englishColumn && row[englishColumn]) {
                 name = row[englishColumn];
             } else {
-                // Try new structure first
-                name = row['Name (English)'] || row['name (english)'] || 
-                       row['Name(English)'] || row['name(english)'] ||
-                       // Then try old structure
-                       row.Name || row.name || 
-                       row.Product || row.product || 
-                       row['Product Name'] || row['product name'] || 
-                       row.Item || row.item || 'Unknown';
+                name = row['Name (English)'] || row['name (english)'] || row['Name(English)'] ||
+                       row.Name || row.name || row.Product || row.product || row['Product Name'] || row.Item || 'Unknown';
             }
-            
-            // Name (Urdu) - try multiple column name variations
+
             let nameUrdu = '';
-            if (urduColumn && row[urduColumn]) {
-                nameUrdu = row[urduColumn];
-            } else {
-                nameUrdu = row['Name (Urdu)'] || row['name (urdu)'] || 
-                          row['Name(Urdu)'] || row['name(urdu)'] ||
-                          row['Urdu Name'] || row['urdu name'] || '';
-            }
-            
-            if (index === 0) {
-                console.log('First product sample:', {
-                    name: name,
-                    nameUrdu: nameUrdu,
-                    allRowKeys: Object.keys(row),
-                    urduColumn: urduColumn,
-                    urduValue: urduColumn ? row[urduColumn] : 'not found',
-                    rowData: row
-                });
-            }
-            
-            // Barcode
-            const barcode = row.Barcode || row.barcode || 
-                           row.SKU || row.sku || 
-                           row['Product Code'] || row['product code'] || '';
-            
-            // Unit type (Liter, Kg, Pack, etc.)
-            const unit = String(row.Unit || row.unit || 
-                               row['Unit Type'] || row['unit type'] || 
-                               row.Type || row.type || 
-                               'Kg').trim();
-            
-            // New price structure: Parchon, Gatta, Wholesale (single prices)
-            const parchonPrice = parseFloat(row['Parchon Price'] || row['parchon price'] || 
-                                           row['ParchonPrice'] || row['parchonprice'] || 0);
-            const gattaPrice = parseFloat(row['Gatta Price'] || row['gatta price'] || 
-                                         row['GattaPrice'] || row['gattaprice'] || 0);
-            const wholesalePrice = parseFloat(row['Wholesale Price'] || row['wholesale price'] || 
-                                             row['WholesalePrice'] || row['wholesaleprice'] || 0);
-            
-            // Default price: Use Parchon Price if available, otherwise first available price
-            const defaultPrice = parchonPrice > 0 ? parchonPrice : 
-                               (gattaPrice > 0 ? gattaPrice : 
-                               (wholesalePrice > 0 ? wholesalePrice : 0));
-            
-            // Stock (not in new structure, set to 999 for unlimited or handle if column exists)
-            const stock = parseInt(row.Stock || row.stock || 
-                                  row.Quantity || row.quantity || 
-                                  row['In Stock'] || row['in stock'] || 999);
-            
-            // Category (not in new structure, set to General)
-            const category = row.Category || row.category || 
-                            row['Product Category'] || row['product category'] || 
-                            'General';
-            
-            // Legacy support: Min Price and Max Price (for backward compatibility)
-            const minPrice = parseFloat(row['Min Price'] || row['min price'] || 
-                                       row['MinPrice'] || row['minprice'] || 0);
-            const maxPrice = parseFloat(row['Max Price'] || row['max price'] || 
-                                       row['MaxPrice'] || row['maxprice'] || 0);
-            
-            // Build description from available fields
-            let description = '';
-            if (nameUrdu) {
-                description = `Urdu: ${nameUrdu}`;
-            }
-            // Build price info string
-            let priceInfo = [];
-            if (parchonPrice > 0) {
-                priceInfo.push(`Parchon: Rs.${parchonPrice.toFixed(2)}`);
-            }
-            if (gattaPrice > 0) {
-                priceInfo.push(`Gatta: Rs.${gattaPrice.toFixed(2)}`);
-            }
-            if (wholesalePrice > 0) {
-                priceInfo.push(`Wholesale: Rs.${wholesalePrice.toFixed(2)}`);
-            }
-            
-            if (priceInfo.length > 0 && description) {
-                description += ' | ' + priceInfo.join(', ');
-            } else if (priceInfo.length > 0) {
-                description = priceInfo.join(', ');
-            }
-            
+            if (urduColumn && row[urduColumn]) nameUrdu = row[urduColumn];
+            else nameUrdu = row['Name (Urdu)'] || row['name (urdu)'] || row['Urdu Name'] || row['urdu name'] || '';
+
+            const barcode = row.Barcode || row.barcode || row.SKU || row.sku || row['Product Code'] || '';
+            const unit = String(row.Unit || row.unit || row['Unit Type'] || row.Type || 'Kg').trim();
+
+            const parchonPrice = parsePriceCell(row['Parchon Price'] ?? row['parchon price'] ?? row.ParchonPrice ?? row['ParchonPrice']);
+            const gattaPrice = parsePriceCell(row['Gatta Price'] ?? row['gatta price'] ?? row.GattaPrice ?? row['GattaPrice']);
+            const wholesalePrice = parsePriceCell(row['Wholesale Price'] ?? row['wholesale price'] ?? row.WholesalePrice ?? row['WholesalePrice']);
+
+            const defaultPrice = parchonPrice > 0 ? parchonPrice : (gattaPrice > 0 ? gattaPrice : wholesalePrice);
+
+            const stock = parseInt(row.Stock || row.stock || row.Quantity || row.quantity || row['In Stock'] || 999);
+            const category = row.Category || row.category || row['Product Category'] || 'General';
+
+            const imageUrl = imageColumn ? String(row[imageColumn] || '').trim() : '';
+
             return {
                 id: index + 1,
                 name: String(name).trim(),
-                price: defaultPrice, // Default price for display
+                price: defaultPrice,
                 stock: stock,
                 category: String(category).trim(),
                 barcode: String(barcode).trim(),
-                description: description || (row.Description || row.description || ''),
                 nameUrdu: String(nameUrdu).trim(),
-                unit: unit, // Unit type: Liter, Kg, Pack, etc.
-                // New price structure (single prices)
-                parchonPrice: parchonPrice,
-                gattaPrice: gattaPrice,
-                wholesalePrice: wholesalePrice,
-                // Legacy support (for backward compatibility)
-                parchonMinPrice: parchonPrice,
-                parchonMaxPrice: parchonPrice,
-                gattaMinPrice: gattaPrice,
-                gattaMaxPrice: gattaPrice,
-                wholesaleMinPrice: wholesalePrice,
-                wholesaleMaxPrice: wholesalePrice,
-                minPrice: minPrice,
-                maxPrice: maxPrice
+                unit: unit,
+                imageUrl: imageUrl,
+                parchonPrice,
+                gattaPrice,
+                wholesalePrice,
+                // Legacy aliases
+                parchonMinPrice: parchonPrice, parchonMaxPrice: parchonPrice,
+                gattaMinPrice: gattaPrice, gattaMaxPrice: gattaPrice,
+                wholesaleMinPrice: wholesalePrice, wholesaleMaxPrice: wholesalePrice
             };
         });
-        
-        console.log('Raw products before filtering:', rawProducts.length);
-        console.log('Sample product before filter:', rawProducts[0]);
-        
-        // Filter out invalid products
-        products = rawProducts.filter(product => {
-            const isValid = product.name !== 'Unknown' && 
-                           product.name !== '' && 
-                           product.price > 0;
-            if (!isValid) {
-                console.log('Filtered out product:', product);
-            }
-            return isValid;
-        });
 
-        console.log('Products after filtering:', products.length);
-        console.log('Sample products:', products.slice(0, 3));
+        products = rawProducts.filter(p => p.name !== 'Unknown' && p.name !== '' && p.price > 0);
 
         if (products.length === 0) {
-            const availableColumns = data.length > 0 ? Object.keys(data[0]).join(', ') : 'none';
-            throw new Error(`No valid products found. Found ${data.length} rows but none had valid Name and Price. Available columns: ${availableColumns}`);
+            throw new Error(`No valid products found. Available columns: ${allColumns.join(', ')}`);
         }
 
         displayProducts(products);
         showNotification(`Loaded ${products.length} products successfully`, 'success');
     } catch (error) {
-        console.error('Error processing Excel:', error);
-        console.error('Error stack:', error.stack);
-        showNotification('Error processing Excel file: ' + error.message, 'error');
-        productsGrid.innerHTML = `<div class="error">
-            <p><strong>Failed to process Excel file</strong></p>
-            <p style="font-size: 12px; margin-top: 10px;">${error.message}</p>
-            <p style="font-size: 11px; margin-top: 10px; color: #666;">Check the browser console (F12) for detailed column information.</p>
-        </div>`;
+        showNotification('Error processing Excel: ' + error.message, 'error');
+        productsGrid.innerHTML = `<div class="error"><p><strong>Failed to process Excel file</strong></p><p style="font-size:12px;margin-top:10px">${escapeHtml(error.message)}</p></div>`;
     }
 }
 
-// Convert Google Drive/Sheets URL to direct download link
+// ==================== URL CONVERSION ====================
 function convertGoogleDriveUrl(url) {
-    // Check if it's a Google Sheets URL
     if (url.includes('docs.google.com/spreadsheets')) {
-        // Extract sheet ID and GID from Google Sheets URL
-        // Format variations:
-        // - https://docs.google.com/spreadsheets/d/SHEET_ID/edit?gid=GID#gid=GID
-        // - https://docs.google.com/spreadsheets/d/SHEET_ID/
-        // - https://docs.google.com/spreadsheets/d/SHEET_ID/edit
         const sheetIdMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-        
         if (sheetIdMatch) {
             const sheetId = sheetIdMatch[1];
-            // Try to extract GID from URL (can be in query string or hash)
             const gidMatch = url.match(/[?&#]gid=(\d+)/);
-            
-            // If GID is specified, use it; otherwise try without gid parameter first
-            // Some sheets work better without gid, others need gid=0
-            if (gidMatch) {
-                const gid = gidMatch[1];
-                const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx&gid=${gid}`;
-                console.log('[URL Conversion] Google Sheets URL converted (with GID):', { 
-                    original: url, 
-                    sheetId: sheetId,
-                    gid: gid,
-                    converted: exportUrl 
-                });
-                return exportUrl;
-            } else {
-                // No GID specified - try without gid parameter (exports entire workbook)
-                // This often works better for the first/default sheet
-                const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx`;
-                console.log('[URL Conversion] Google Sheets URL converted (no GID):', { 
-                    original: url, 
-                    sheetId: sheetId,
-                    converted: exportUrl 
-                });
-                return exportUrl;
-            }
-        } else {
-            console.error('[URL Conversion] Could not extract sheet ID from URL:', url);
-            return url; // Return original if we can't parse it
+            if (gidMatch) return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx&gid=${gidMatch[1]}`;
+            return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx`;
         }
+        return url;
     }
-    
-    // Check if it's a Google Drive URL (for regular files)
     if (url.includes('drive.google.com')) {
-        // Extract file ID from various Google Drive URL formats
-        let fileId = '';
-        
-        // Format: https://drive.google.com/file/d/FILE_ID/view
-        const match1 = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-        if (match1) {
-            fileId = match1[1];
-        }
-        
-        // Format: https://drive.google.com/open?id=FILE_ID
-        const match2 = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-        if (match2) {
-            fileId = match2[1];
-        }
-        
-        if (fileId) {
-            // Convert to direct download URL
-            return `https://drive.google.com/uc?export=download&id=${fileId}`;
-        }
+        const m1 = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+        const m2 = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+        const fileId = (m1 && m1[1]) || (m2 && m2[1]);
+        if (fileId) return `https://drive.google.com/uc?export=download&id=${fileId}`;
     }
-    
-    // Check if it's a Dropbox URL
     if (url.includes('dropbox.com')) {
-        // Convert Dropbox share link to direct download
         return url.replace('www.dropbox.com', 'dl.dropboxusercontent.com').split('?')[0];
     }
-    
-    // Check if it's a OneDrive/Microsoft 365 URL
-    if (url.includes('onedrive.live.com') || url.includes('1drv.ms') || url.includes('excel.cloud.microsoft') || url.includes('sharepoint.com')) {
+    if (url.includes('onedrive') || url.includes('1drv.ms') || url.includes('excel.cloud.microsoft') || url.includes('sharepoint.com')) {
         return convertOneDriveUrl(url);
     }
-    
     return url;
 }
 
-// Convert OneDrive/Microsoft 365 URL to direct download link
 function convertOneDriveUrl(url) {
     try {
-        // Handle excel.cloud.microsoft format
-        // Format: https://excel.cloud.microsoft/open/onedrive/?docId=DRIVE_ID!ITEM_ID&driveId=DRIVE_ID
         if (url.includes('excel.cloud.microsoft')) {
             const urlObj = new URL(url);
             const docId = urlObj.searchParams.get('docId');
             const driveId = urlObj.searchParams.get('driveId');
-            
             if (docId && driveId) {
-                // docId format is usually "DRIVE_ID!ITEM_ID"
                 const parts = docId.split('!');
                 const itemId = parts.length > 1 ? parts[1] : parts[0];
-                
-                // Try multiple methods for OneDrive access
-                // Method 1: Try Graph API (requires auth, but might work for public files)
-                const graphUrl = `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/content`;
-                
-                // Method 2: Try using the sharing API endpoint (for public files)
-                // This format might work for publicly shared files
-                const sharingUrl = `https://graph.microsoft.com/v1.0/shares/${encodeURIComponent(`u!${btoa(`https://onedrive.live.com/redir?resid=${driveId}!${itemId}`).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}`)}/driveItem/content`;
-                
-                // Return Graph API URL first, we'll fallback if needed
-                // Note: Both methods may require the file to be publicly shared
-                return graphUrl;
+                return `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/content`;
             }
         }
-        
-        // Handle onedrive.live.com format
         if (url.includes('onedrive.live.com')) {
-            // Extract resource ID from URL
             const match = url.match(/resid=([^&]+)/);
-            if (match) {
-                const resid = decodeURIComponent(match[1]);
-                return `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}`;
-            }
+            if (match) return `https://onedrive.live.com/download?resid=${encodeURIComponent(decodeURIComponent(match[1]))}`;
         }
-        
-        // Handle 1drv.ms short links
-        if (url.includes('1drv.ms')) {
-            // Short links need to be expanded first, but we'll try the direct format
-            return url.replace('1drv.ms', 'onedrive.live.com');
-        }
-        
-        // Handle SharePoint URLs
-        if (url.includes('sharepoint.com')) {
-            // Try to convert SharePoint sharing link to direct download
-            if (url.includes('/:x:/') || url.includes('/:w:/')) {
-                // Convert sharing link to download format
-                let downloadUrl = url;
-                if (url.includes('/:x:/')) {
-                    downloadUrl = url.replace('/:x:/', '/:x:/r/');
-                } else if (url.includes('/:w:/')) {
-                    downloadUrl = url.replace('/:w:/', '/:w:/r/');
-                }
-                // Add download parameter
-                downloadUrl += (downloadUrl.includes('?') ? '&' : '?') + 'download=1';
-                return downloadUrl;
-            }
-        }
-        
         return url;
-    } catch (error) {
-        console.error('Error converting OneDrive URL:', error);
-        return url;
-    }
+    } catch (e) { return url; }
 }
 
-// Load Excel file from URL with fallback methods
 async function loadExcel() {
     const url = excelUrlInput.value.trim();
-    if (!url) {
-        showNotification('Please enter an Excel file URL', 'error');
-        return;
-    }
+    if (!url) { showNotification('Please enter an Excel file URL', 'error'); return; }
 
     excelUrl = url;
     localStorage.setItem('excelUrl', url);
-    
     showNotification('Loading products...', 'info');
-    const isGoogleSheets = url.includes('docs.google.com/spreadsheets');
-    const loadingMsg = isGoogleSheets ? 
-        'Loading products from Google Sheets...<br><small>This may take a moment...</small>' :
-        'Loading products...<br><small>This may take a moment...</small>';
-    productsGrid.innerHTML = `<div class="loading">${loadingMsg}</div>`;
-    
-    // Update loading message after a delay
+    productsGrid.innerHTML = `<div class="loading">Loading products...<br><small>This may take a moment...</small></div>`;
+
     const loadingTimeout = setTimeout(() => {
-        productsGrid.innerHTML = '<div class="loading">Still loading...<br><small>If this takes too long, try downloading the file and using "Choose Local File"</small></div>';
+        productsGrid.innerHTML = '<div class="loading">Still loading...<br><small>If this takes too long, try "Choose Local File"</small></div>';
     }, 5000);
-    
+
     try {
-        // Check URL type - prioritize Google Sheets
-        const isGoogleSheets = url.includes('docs.google.com/spreadsheets');
-        // Only check for OneDrive if it's NOT Google Sheets (to avoid false positives)
-        const isOneDrive = !isGoogleSheets && (url.includes('onedrive') || url.includes('excel.cloud.microsoft') || url.includes('sharepoint'));
-        
-        console.log('[loadExcel] URL type detection:', { url, isGoogleSheets, isOneDrive });
-        
-        // Add timeout to prevent hanging
-        const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Request timeout after 30 seconds. The file may require authentication or be inaccessible.')), 30000);
-        });
-        
-        // For OneDrive, try multiple methods
+        const isOneDrive = !url.includes('docs.google.com') && (url.includes('onedrive') || url.includes('excel.cloud.microsoft') || url.includes('sharepoint'));
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 30000));
+
         if (isOneDrive) {
-            console.log('[loadExcel] Using OneDrive methods');
-            await Promise.race([tryOneDriveMethods(url), timeoutPromise]);
+            await Promise.race([tryOneDriveMethods(url), timeout]);
         } else {
-            // Google Sheets and other URLs use single method
-            console.log('[loadExcel] Using single method (Google Sheets or other)');
-            await Promise.race([trySingleMethod(url), timeoutPromise]);
+            await Promise.race([trySingleMethod(url), timeout]);
         }
-        
         clearTimeout(loadingTimeout);
     } catch (error) {
         clearTimeout(loadingTimeout);
-        console.error('Error in loadExcel:', error);
-        console.error('Error details:', {
-            message: error.message,
-            response: error.response?.status,
-            request: error.request ? 'Request made but no response' : 'No request made'
-        });
-        
-        let errorMsg = 'Failed to load Excel file. ';
-        
-        if (error.message.includes('timeout')) {
-            errorMsg += 'Request timed out. The file may require authentication or be inaccessible.';
-        } else if (error.message.includes('Authentication')) {
-            errorMsg += 'OneDrive file requires authentication. Please download the file and use "Choose Local File" instead.';
-        } else if (error.message) {
-            errorMsg += error.message;
-        } else {
-            errorMsg += 'Unknown error occurred.';
-        }
-        
-        showNotification(errorMsg, 'error');
-        productsGrid.innerHTML = `<div class="error">
-            <p><strong>Failed to load products</strong></p>
-            <p style="font-size: 14px; margin-top: 10px; color: #dc3545;">${errorMsg}</p>
-            <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 6px;">
-                <p style="font-size: 13px; font-weight: 600; margin-bottom: 10px;">Solutions:</p>
-                <ol style="font-size: 12px; margin-left: 20px; line-height: 1.8;">
-                    <li>Download the Excel file from OneDrive</li>
-                    <li>Click "Choose Local File" button above</li>
-                    <li>Select the downloaded file</li>
-                </ol>
-            </div>
-            <p style="font-size: 11px; margin-top: 15px; color: #666;">Check the browser console (Press F12) for technical details.</p>
-        </div>`;
+        let msg = error.message.includes('timeout') ? 'Request timed out. Try "Choose Local File".' : (error.message || 'Unknown error');
+        showNotification('Failed to load: ' + msg, 'error');
+        productsGrid.innerHTML = `<div class="error"><p><strong>Failed to load products</strong></p><p style="font-size:13px;margin-top:10px">${escapeHtml(msg)}</p><p style="font-size:12px;margin-top:10px">Try clicking "Choose Local File" to load from your computer.</p></div>`;
     }
 }
 
-// Try loading from OneDrive using multiple methods
-async function tryOneDriveMethods(url) {
-    const methods = [];
-    
-    // Method 1: Graph API
-    const downloadUrl1 = convertGoogleDriveUrl(url);
-    methods.push({ url: downloadUrl1, name: 'Graph API' });
-    
-    // Method 2: Try alternative format
-    if (url.includes('excel.cloud.microsoft')) {
-        const urlObj = new URL(url);
-        const docId = urlObj.searchParams.get('docId');
-        const driveId = urlObj.searchParams.get('driveId');
-        if (docId && driveId) {
-            const parts = docId.split('!');
-            const itemId = parts.length > 1 ? parts[1] : parts[0];
-            // Try alternative endpoint
-            const altUrl = `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/content?download=true`;
-            methods.push({ url: altUrl, name: 'Graph API (download)' });
-        }
-    }
-    
-    console.log(`Trying ${methods.length} methods for OneDrive file...`);
-    
-    // Try each method
-    for (let i = 0; i < methods.length; i++) {
-        const method = methods[i];
-        try {
-            console.log(`[${i + 1}/${methods.length}] Trying ${method.name}:`, method.url);
-            
-            const response = await axios.get(method.url, {
-                responseType: 'arraybuffer',
-                timeout: 10000, // Reduced timeout to fail faster
-                headers: {
-                    'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, */*'
-                },
-                validateStatus: function (status) {
-                    return status < 500; // Don't throw for 4xx errors, we'll handle them
-                }
-            });
-
-            console.log(`${method.name} response status:`, response.status);
-
-            if (response.status === 200 && response.data && response.data.length > 0) {
-                console.log(`✓ Success with ${method.name}! File size:`, response.data.length, 'bytes');
-                processExcelData(response.data);
-                return; // Success!
-            } else if (response.status === 401 || response.status === 403) {
-                console.log(`✗ ${method.name} failed: Authentication required (${response.status})`);
-                // OneDrive requires authentication - show helpful message
-                if (i === methods.length - 1) {
-                    throw new Error('OneDrive file requires authentication. Please download the file and use "Choose Local File" button instead.');
-                }
-                continue; // Try next method
-            } else {
-                console.log(`✗ ${method.name} failed: Status ${response.status}`);
-                if (i === methods.length - 1) {
-                    throw new Error(`All methods failed: HTTP ${response.status}`);
-                }
-                continue;
-            }
-        } catch (error) {
-            console.log(`✗ ${method.name} failed:`, error.message);
-            if (i === methods.length - 1) {
-                // Last method failed, throw error
-                throw error;
-            }
-            continue; // Try next method
-        }
-    }
-    
-    // Should not reach here, but just in case
-    throw new Error('All methods failed');
-}
-
-// Try loading from a single URL
 async function trySingleMethod(url) {
-    try {
-        const downloadUrl = convertGoogleDriveUrl(url);
-        console.log('Original URL:', url);
-        console.log('Converted download URL:', downloadUrl);
-        
-        const response = await axios.get(downloadUrl, {
-            responseType: 'arraybuffer',
-            timeout: 30000,
-            headers: {
-                'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, */*'
-            },
-            maxRedirects: 5  // Allow redirects for Google Sheets
-        });
+    const downloadUrl = convertGoogleDriveUrl(url);
+    const response = await axios.get(downloadUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        headers: { 'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, */*' },
+        maxRedirects: 5
+    });
+    const size = response.data?.byteLength ?? response.data?.length ?? 0;
+    if (!response.data || size === 0) throw new Error('Empty response from server');
+    processExcelData(response.data);
+}
 
-        if (!response.data || response.data.length === 0) {
-            throw new Error('Empty response from server');
-        }
-
-        console.log('File downloaded successfully, size:', response.data.length, 'bytes');
-        processExcelData(response.data);
-    } catch (error) {
-        console.error('Error loading Excel:', error);
-        console.error('Error response status:', error.response?.status);
-        
-        // Check if it's a Google Sheets access error
-        if (url.includes('docs.google.com/spreadsheets')) {
-            if (error.response && (error.response.status === 403 || error.response.status === 401)) {
-                showNotification('Google Sheets file is not publicly accessible', 'error');
-                productsGrid.innerHTML = `<div class="error">
-                    <p><strong>Google Sheets Access Denied</strong></p>
-                    <p style="font-size: 14px; margin-top: 10px;">The Google Sheet needs to be publicly accessible.</p>
-                    <div style="margin-top: 15px; padding: 15px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
-                        <p style="font-size: 13px; font-weight: 600; margin-bottom: 10px;">To fix this:</p>
-                        <ol style="font-size: 12px; margin-left: 20px; line-height: 2;">
-                            <li>Open your Google Sheet</li>
-                            <li>Click <strong>"Share"</strong> button (top right)</li>
-                            <li>Change access to <strong>"Anyone with the link"</strong> → <strong>"Viewer"</strong></li>
-                            <li>Click "Done"</li>
-                            <li>Click "Refresh Products" button above</li>
-                        </ol>
-                    </div>
-                </div>`;
-                return;
+async function tryOneDriveMethods(url) {
+    const methods = [{ url: convertGoogleDriveUrl(url), name: 'Graph API' }];
+    for (let i = 0; i < methods.length; i++) {
+        try {
+            const response = await axios.get(methods[i].url, {
+                responseType: 'arraybuffer', timeout: 10000,
+                validateStatus: (s) => s < 500
+            });
+            if (response.status === 200 && response.data?.length > 0) {
+                processExcelData(response.data); return;
             }
+            if (response.status === 401 || response.status === 403) {
+                throw new Error('OneDrive file requires authentication. Please download and use "Choose Local File".');
+            }
+        } catch (err) {
+            if (i === methods.length - 1) throw err;
         }
-        
-        showGenericError(url, error);
     }
 }
 
-
-// Show generic error message
-function showGenericError(url, error) {
-    let errorMessage = 'Error loading Excel file. ';
-    
-    if (error.response) {
-        if (error.response.status === 404) {
-            errorMessage += 'File not found (404). Please check the URL.';
-        } else if (error.response.status === 403) {
-            errorMessage += 'Access denied (403). The file may be private. Make sure the file is publicly accessible.';
-        } else if (error.response.status === 0) {
-            errorMessage += 'CORS error. The file server does not allow cross-origin requests.';
-        } else {
-            errorMessage += `HTTP ${error.response.status}: ${error.response.statusText}`;
-        }
-    } else if (error.request) {
-        errorMessage += 'No response from server. Check your internet connection and the file URL.';
-    } else if (error.message) {
-        errorMessage += error.message;
-    } else {
-        errorMessage += 'Unknown error occurred. Please check the console for details.';
-    }
-    
-    showNotification(errorMessage, 'error');
-    productsGrid.innerHTML = `<div class="error">
-        <p><strong>Failed to load products</strong></p>
-        <p style="font-size: 12px; margin-top: 10px;">${errorMessage}</p>
-        <p style="font-size: 12px; margin-top: 10px;">Check the browser console (F12) for more details.</p>
-    </div>`;
-}
-
-// Display products
+// ==================== DISPLAY PRODUCTS ====================
 function displayProducts(productsToShow) {
-    console.log('displayProducts called with', productsToShow.length, 'products');
-    
-    if (!productsGrid) {
-        console.error('productsGrid element not found!');
-        return;
-    }
-    
-    if (!productsToShow || productsToShow.length === 0) {
-        console.log('No products to display');
+    if (!productsGrid) return;
+    if (!productsToShow?.length) {
         productsGrid.innerHTML = '<div class="empty">No products found</div>';
         return;
     }
 
-    console.log('Rendering products:', productsToShow.slice(0, 3));
-    
     try {
-        const html = productsToShow.map(product => {
-            if (!product.name || !product.price) {
-                console.warn('Invalid product:', product);
-                return '';
-            }
-            // Show Urdu name if available
-            const nameDisplay = product.nameUrdu ? 
-                `${product.name}<br><small style="color: #666; font-size: 0.9em;">${product.nameUrdu}</small>` : 
-                product.name;
-            
-            // Display default price (Parchon if available, otherwise first available)
-            let displayPrice = product.parchonPrice || product.gattaPrice || product.wholesalePrice || product.price;
-            
+        productsGrid.innerHTML = productsToShow.map(product => {
+            if (!product.name || !product.price) return '';
+
+            const effectiveStock = getEffectiveStock(product);
+            const isLowStock = product.stock !== 999 && effectiveStock > 0 && effectiveStock <= settings.lowStockThreshold;
+            const isOutOfStock = effectiveStock === 0;
+
+            const safeName = escapeHtml(product.name);
+            const safeNameUrdu = escapeHtml(product.nameUrdu);
+            const safeCategory = escapeHtml(product.category);
+
+            const nameDisplay = product.nameUrdu
+                ? `${safeName}<br><small style="color:var(--text-muted);font-size:0.85em">${safeNameUrdu}</small>`
+                : safeName;
+
+            const displayPrice = product.parchonPrice || product.gattaPrice || product.wholesalePrice || product.price;
+
+            const imageHtml = product.imageUrl
+                ? `<img src="${escapeHtml(product.imageUrl)}" class="product-image" alt="${safeName}" onerror="this.style.display='none'">`
+                : '';
+
+            const pricesHtml = (product.parchonPrice > 0 || product.gattaPrice > 0 || product.wholesalePrice > 0) ? `
+                <div class="product-prices-mini">
+                    ${product.parchonPrice > 0 ? `Parchon: Rs.${product.parchonPrice.toFixed(2)}` : ''}
+                    ${product.parchonPrice > 0 && product.gattaPrice > 0 ? ' | ' : ''}
+                    ${product.gattaPrice > 0 ? `Gatta: Rs.${product.gattaPrice.toFixed(2)}` : ''}
+                    ${(product.parchonPrice > 0 || product.gattaPrice > 0) && product.wholesalePrice > 0 ? ' | ' : ''}
+                    ${product.wholesalePrice > 0 ? `Wholesale: Rs.${product.wholesalePrice.toFixed(2)}` : ''}
+                </div>` : '';
+
+            const stockDisplay = product.stock === 999 ? 'In Stock' : `Stock: ${effectiveStock}`;
+
             return `
                 <div class="product-card" data-id="${product.id}">
+                    ${isLowStock ? '<div class="low-stock-badge">Low Stock</div>' : ''}
+                    ${imageHtml}
                     <div class="product-info">
                         <h3 class="product-name">${nameDisplay}</h3>
-                        <p class="product-category">${product.category}</p>
+                        <p class="product-category">${safeCategory}</p>
                         <div class="product-details">
                             <span class="product-price">Rs.${displayPrice.toFixed(2)}</span>
-                            <span class="product-stock">Stock: ${product.stock}</span>
+                            <span class="product-stock" style="${isLowStock ? 'color:var(--danger);font-weight:600' : ''}">${stockDisplay}</span>
                         </div>
-                        ${(product.parchonPrice > 0 || product.gattaPrice > 0 || product.wholesalePrice > 0) ? 
-                            `<div style="font-size: 11px; color: #666; margin-top: 5px;">
-                                ${product.parchonPrice > 0 ? `Parchon: Rs.${product.parchonPrice.toFixed(2)}` : ''}
-                                ${product.parchonPrice > 0 && product.gattaPrice > 0 ? ' | ' : ''}
-                                ${product.gattaPrice > 0 ? `Gatta: Rs.${product.gattaPrice.toFixed(2)}` : ''}
-                                ${(product.parchonPrice > 0 || product.gattaPrice > 0) && product.wholesalePrice > 0 ? ' | ' : ''}
-                                ${product.wholesalePrice > 0 ? `Wholesale: Rs.${product.wholesalePrice.toFixed(2)}` : ''}
-                            </div>` : ''}
+                        ${pricesHtml}
                     </div>
-                    <button class="btn btn-add" onclick="addToCart(${product.id})" ${product.stock === 0 ? 'disabled' : ''}>
-                        ${product.stock === 0 ? 'Out of Stock' : 'Add to Cart'}
+                    <button class="btn btn-add" onclick="addToCart(${product.id})" ${isOutOfStock ? 'disabled' : ''}>
+                        ${isOutOfStock ? 'Out of Stock' : 'Add to Cart'}
                     </button>
                 </div>
             `;
-        }).filter(html => html !== '').join('');
-        
-        productsGrid.innerHTML = html;
-        console.log('Products displayed successfully');
-    } catch (error) {
-        console.error('Error displaying products:', error);
-        productsGrid.innerHTML = `<div class="error">
-            <p><strong>Error displaying products</strong></p>
-            <p style="font-size: 12px; margin-top: 10px;">${error.message}</p>
-        </div>`;
+        }).filter(Boolean).join('');
+    } catch (err) {
+        productsGrid.innerHTML = `<div class="error">Error displaying products: ${escapeHtml(err.message)}</div>`;
     }
 }
 
-// Filter products
+// ==================== FILTER ====================
 function filterProducts() {
-    if (!searchInput) {
-        console.error('searchInput not found');
-        return;
-    }
-    
-    const searchTerm = searchInput.value.toLowerCase().trim();
-    console.log('Searching for:', searchTerm, 'in', products.length, 'products');
-    
-    if (!searchTerm) {
-        // If search is empty, show all products
-        displayProducts(products);
-        return;
-    }
-    
-    const filtered = products.filter(product => {
-        // Convert all values to strings for safe comparison
-        const name = String(product.name || '').toLowerCase();
-        const nameUrdu = String(product.nameUrdu || '').toLowerCase();
-        const category = String(product.category || '').toLowerCase();
-        const barcode = String(product.barcode || '').toLowerCase();
-        
-        const nameMatch = name.includes(searchTerm);
-        const nameUrduMatch = nameUrdu.includes(searchTerm);
-        const categoryMatch = category.includes(searchTerm);
-        const barcodeMatch = barcode.includes(searchTerm);
-        
-        return nameMatch || nameUrduMatch || categoryMatch || barcodeMatch;
-    });
-    
-    console.log('Filtered products:', filtered.length);
-    displayProducts(filtered);
+    if (!searchInput) return;
+    displayProducts(getFilteredProducts());
 }
 
-// Price selection modal state
+// ==================== PRICE MODAL ====================
 let selectedProductForPrice = null;
 let selectedPrice = null;
-let editingCartItemIndex = null; // Track if we're editing a cart item (null = adding new, number = editing existing)
+let editingCartItemIndex = null;
 
-// Quantity input modal state
-let editingQuantityItemIndex = null;
-
-// Show price selection modal with all price options
-// If cartItemIndex is provided, we're editing an existing cart item
 function showPriceModal(product, cartItemIndex = null) {
     selectedProductForPrice = product;
     editingCartItemIndex = cartItemIndex;
-    
-    // If editing, use current cart item price; otherwise use first available price
+
     if (cartItemIndex !== null && cart[cartItemIndex]) {
         selectedPrice = cart[cartItemIndex].price;
     } else {
-        // Default to first available price (Parchon > Gatta > Wholesale > default price)
-        selectedPrice = product.parchonPrice || product.gattaPrice || product.wholesalePrice || product.price;
+        // Default price tier from settings
+        const tier = settings.defaultPriceTier;
+        if (tier === 'gatta' && product.gattaPrice > 0) selectedPrice = product.gattaPrice;
+        else if (tier === 'wholesale' && product.wholesalePrice > 0) selectedPrice = product.wholesalePrice;
+        else selectedPrice = product.parchonPrice || product.gattaPrice || product.wholesalePrice || product.price;
     }
-    
+
     const modal = document.getElementById('priceModal');
-    const productName = document.getElementById('modalProductName');
-    const priceOptions = document.getElementById('priceOptions');
-    const customPriceInput = document.getElementById('customPriceInput');
+    document.getElementById('modalProductName').textContent = product.name;
+    document.getElementById('customPriceInput').value = selectedPrice.toFixed(2);
+
     const modalTitle = modal.querySelector('.modal-header h3');
-    
-    productName.textContent = product.name;
-    customPriceInput.value = selectedPrice.toFixed(2);
-    
-    // Update modal title based on whether we're adding or editing
-    if (modalTitle) {
-        modalTitle.textContent = cartItemIndex !== null ? 'Change Price' : 'Select Price';
-    }
-    
-    // Build price options - show all available category prices
+    if (modalTitle) modalTitle.textContent = cartItemIndex !== null ? 'Change Price' : 'Select Price';
+
     let optionsHTML = '';
-    
-    // Parchon Price
-    if (product.parchonPrice > 0) {
-        optionsHTML += `
-            <div class="price-option ${selectedPrice === product.parchonPrice ? 'selected' : ''}" 
-                 onclick="selectPrice(${product.parchonPrice})">
-                <div class="price-option-label">Parchon Price</div>
-                <div class="price-option-value">Rs.${product.parchonPrice.toFixed(2)}</div>
-            </div>
-        `;
-    }
-    
-    // Gatta Price
-    if (product.gattaPrice > 0) {
-        optionsHTML += `
-            <div class="price-option ${selectedPrice === product.gattaPrice ? 'selected' : ''}" 
-                 onclick="selectPrice(${product.gattaPrice})">
-                <div class="price-option-label">Gatta Price</div>
-                <div class="price-option-value">Rs.${product.gattaPrice.toFixed(2)}</div>
-            </div>
-        `;
-    }
-    
-    // Wholesale Price
-    if (product.wholesalePrice > 0) {
-        optionsHTML += `
-            <div class="price-option ${selectedPrice === product.wholesalePrice ? 'selected' : ''}" 
-                 onclick="selectPrice(${product.wholesalePrice})">
-                <div class="price-option-label">Wholesale Price</div>
-                <div class="price-option-value">Rs.${product.wholesalePrice.toFixed(2)}</div>
-            </div>
-        `;
-    }
-    
-    priceOptions.innerHTML = optionsHTML;
-    
-    // Update button text based on whether we're adding or editing
-    const confirmButton = modal.querySelector('.modal-footer .btn-primary');
-    if (confirmButton) {
-        confirmButton.textContent = cartItemIndex !== null ? 'Update Price' : 'Add to Cart';
-    }
-    
+    if (product.parchonPrice > 0) optionsHTML += priceOptionHTML('Parchon Price', product.parchonPrice, selectedPrice);
+    if (product.gattaPrice > 0) optionsHTML += priceOptionHTML('Gatta Price', product.gattaPrice, selectedPrice);
+    if (product.wholesalePrice > 0) optionsHTML += priceOptionHTML('Wholesale Price', product.wholesalePrice, selectedPrice);
+    document.getElementById('priceOptions').innerHTML = optionsHTML;
+
+    const confirmBtn = modal.querySelector('.modal-footer .btn-primary');
+    if (confirmBtn) confirmBtn.textContent = cartItemIndex !== null ? 'Update Price' : 'Add to Cart';
+
     modal.style.display = 'block';
 }
 
-// Close price modal
+function priceOptionHTML(label, price, selected) {
+    return `
+        <div class="price-option ${Math.abs(selected - price) < 0.01 ? 'selected' : ''}" onclick="selectPrice(${price})">
+            <div class="price-option-label">${label}</div>
+            <div class="price-option-value">Rs.${price.toFixed(2)}</div>
+        </div>`;
+}
+
 function closePriceModal() {
     const modal = document.getElementById('priceModal');
-    modal.style.display = 'none';
+    if (modal) modal.style.display = 'none';
     selectedProductForPrice = null;
     selectedPrice = null;
     editingCartItemIndex = null;
 }
 
-// Close modal when clicking outside of it
-if (typeof window.onclick === 'function') {
-    const originalOnclick = window.onclick;
-    window.onclick = function(event) {
-        originalOnclick(event);
-        const priceModal = document.getElementById('priceModal');
-        const languageModal = document.getElementById('languageModal');
-        if (event.target === priceModal) {
-            closePriceModal();
-        }
-        if (event.target === languageModal) {
-            closeLanguageModal();
-        }
-    };
-} else {
-    window.onclick = function(event) {
-        const priceModal = document.getElementById('priceModal');
-        const languageModal = document.getElementById('languageModal');
-        if (event.target === priceModal) {
-            closePriceModal();
-        }
-        if (event.target === languageModal) {
-            closeLanguageModal();
-        }
-    };
-}
-
-// Close modal when clicking outside of it
-window.onclick = function(event) {
-    const priceModal = document.getElementById('priceModal');
-    const languageModal = document.getElementById('languageModal');
-    const quantityModal = document.getElementById('quantityModal');
-    if (event.target === priceModal) {
-        closePriceModal();
-    }
-    if (event.target === languageModal) {
-        closeLanguageModal();
-    }
-    if (event.target === quantityModal) {
-        closeQuantityModal();
-    }
-}
-
-// Select a price option
 function selectPrice(price) {
     selectedPrice = price;
-    const customPriceInput = document.getElementById('customPriceInput');
-    customPriceInput.value = price.toFixed(2);
-    
-    // Update selected state in UI
-    document.querySelectorAll('.price-option').forEach(option => {
-        option.classList.remove('selected');
-        const optionPrice = parseFloat(option.querySelector('.price-option-value').textContent.replace('Rs.', '').trim());
-        if (Math.abs(optionPrice - price) < 0.01) {
-            option.classList.add('selected');
-        }
+    document.getElementById('customPriceInput').value = price.toFixed(2);
+    document.querySelectorAll('.price-option').forEach(opt => {
+        const optPrice = parseFloat(opt.querySelector('.price-option-value').textContent.replace('Rs.', ''));
+        opt.classList.toggle('selected', Math.abs(optPrice - price) < 0.01);
     });
 }
 
-// Confirm price selection and add to cart or update cart item
 function confirmPriceSelection() {
     if (!selectedProductForPrice) return;
-    
-    const customPriceInput = document.getElementById('customPriceInput');
-    const customPrice = parseFloat(customPriceInput.value);
-    
+    const customPrice = parseFloat(document.getElementById('customPriceInput').value);
     if (isNaN(customPrice) || customPrice < 0) {
         showNotification('Please enter a valid price', 'error');
         return;
     }
-    
-    // Use custom price if entered, otherwise use selected price
     const finalPrice = customPrice > 0 ? customPrice : selectedPrice;
-    
-    // If editing an existing cart item, update it; otherwise add new item
+
     if (editingCartItemIndex !== null && cart[editingCartItemIndex]) {
-        // Update existing cart item price
         cart[editingCartItemIndex].price = finalPrice;
         cart[editingCartItemIndex].customPrice = finalPrice;
-        cart[editingCartItemIndex].originalPrice = selectedProductForPrice.price;
         updateCart();
         showNotification(`Price updated to Rs.${finalPrice.toFixed(2)}`, 'success');
     } else {
-        // Add new item to cart
         addToCartWithPrice(selectedProductForPrice.id, finalPrice);
     }
-    
     closePriceModal();
 }
 
-// Add to cart with specific price
+// ==================== CART ====================
+function addToCart(productId) {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+    const effectiveStock = getEffectiveStock(product);
+    if (effectiveStock === 0) {
+        showNotification('Product is out of stock', 'error');
+        return;
+    }
+    showPriceModal(product);
+}
+
 function addToCartWithPrice(productId, price) {
     const product = products.find(p => p.id === productId);
     if (!product) return;
 
-    if (product.stock === 0) {
+    const effectiveStock = getEffectiveStock(product);
+    if (effectiveStock === 0) {
         showNotification('Product is out of stock', 'error');
         return;
     }
 
-    // Check if same product with same custom price already exists
-    const cartItem = cart.find(item => 
-        item.id === productId && 
-        item.customPrice && 
-        Math.abs(item.customPrice - price) < 0.01
-    );
-    
-    if (cartItem) {
-        // Same product with same price - increase quantity
-        if (cartItem.quantity >= product.stock) {
+    const existing = cart.find(item => item.id === productId && Math.abs(item.price - price) < 0.01);
+    if (existing) {
+        if (product.stock !== 999 && existing.quantity >= effectiveStock) {
             showNotification('Not enough stock available', 'error');
             return;
         }
-        cartItem.quantity++;
+        existing.quantity++;
     } else {
-        // New item or different price - add new entry
-        const isCustomPrice = Math.abs(price - product.price) > 0.01;
         cart.push({
             ...product,
-            price: price, // Use the selected/custom price
-            customPrice: isCustomPrice ? price : undefined, // Track if this is a custom price
-            originalPrice: product.price, // Keep original for reference
+            price,
+            customPrice: Math.abs(price - product.price) > 0.01 ? price : undefined,
+            originalPrice: product.price,
             quantity: 1,
-            unit: product.unit || 'Kg' // Preserve unit type
+            unit: product.unit || 'Kg'
         });
     }
 
     updateCart();
-    const priceMsg = Math.abs(price - product.price) > 0.01 ? ` at Rs.${price.toFixed(2)}` : '';
-    showNotification(`${product.name} added to cart${priceMsg}`, 'success');
+    showNotification(`${product.name} added to cart`, 'success');
 }
 
-// Add to cart - always show price selection modal
-function addToCart(productId) {
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
-
-    if (product.stock === 0) {
-        showNotification('Product is out of stock', 'error');
-        return;
-    }
-
-    // Always show price selection modal with all available prices
-    showPriceModal(product);
-}
-
-// Make functions available globally
-window.addToCart = addToCart;
-window.selectPrice = selectPrice;
-window.closePriceModal = closePriceModal;
-window.confirmPriceSelection = confirmPriceSelection;
-
-// Remove from cart
-function removeFromCart(productId) {
-    cart = cart.filter(item => item.id !== productId);
-    updateCart();
-}
-
-// Update quantity by product ID (for backward compatibility)
-function updateQuantity(productId, change) {
-    // Find first item with this ID
-    const cartItem = cart.find(item => item.id === productId);
-    if (!cartItem) return;
-
-    const product = products.find(p => p.id === productId);
-    const newQuantity = cartItem.quantity + change;
-
-    if (newQuantity <= 0) {
-        removeFromCart(productId);
-        return;
-    }
-
-    if (newQuantity > product.stock) {
-        showNotification('Not enough stock available', 'error');
-        return;
-    }
-
-    cartItem.quantity = newQuantity;
-    updateCart();
-}
-
-// Format quantity for display based on product unit
-function formatQuantity(quantity, unit = 'Kg') {
-    if (quantity <= 0) {
-        return '0';
-    }
-    
-    // Normalize unit name (handle variations)
-    const normalizedUnit = String(unit).trim();
-    const unitLower = normalizedUnit.toLowerCase();
-    
-    // Handle different unit types
-    if (unitLower === 'kg' || unitLower === 'kilogram' || unitLower === 'kgs') {
-        // For Kg: show as kg or gm
-        if (quantity >= 1) {
-            return `${quantity.toFixed(quantity % 1 === 0 ? 0 : 2)} kg`;
-        } else {
-            const grams = Math.round(quantity * 1000);
-            return `${grams} gm`;
-        }
-    } else if (unitLower === 'liter' || unitLower === 'litre' || unitLower === 'l' || unitLower === 'liters' || unitLower === 'litres') {
-        // For Liter: show as Liter or ml
-        if (quantity >= 1) {
-            return `${quantity.toFixed(quantity % 1 === 0 ? 0 : 2)} Liter`;
-        } else {
-            const ml = Math.round(quantity * 1000);
-            return `${ml} ml`;
-        }
-    } else if (unitLower === 'pack' || unitLower === 'packs' || unitLower === 'pcs' || unitLower === 'piece' || unitLower === 'pieces') {
-        // For Pack/Piece: show as whole number
-        return `${Math.round(quantity)} ${normalizedUnit}`;
-    } else {
-        // Default: show with unit
-        return `${quantity.toFixed(quantity % 1 === 0 ? 0 : 2)} ${normalizedUnit}`;
-    }
-}
-
-// Parse quantity input based on product unit (handles "2.5 kg", "500 gm", "2.5 Liter", "500 ml", "3 Pack", etc.)
-function parseQuantity(input, unit = 'Kg') {
-    if (!input || typeof input !== 'string') {
-        return parseFloat(input) || 0;
-    }
-    
-    const trimmed = input.trim().toLowerCase();
-    const unitLower = String(unit).toLowerCase();
-    
-    // Try to parse as number first
-    const numberMatch = trimmed.match(/^([\d.]+)/);
-    if (!numberMatch) {
-        return 0;
-    }
-    
-    const value = parseFloat(numberMatch[1]);
-    if (isNaN(value)) {
-        return 0;
-    }
-    
-    // Check for unit in input
-    if (trimmed.includes('gm') || trimmed.includes('gram')) {
-        // Convert grams to kg
-        return value / 1000;
-    } else if (trimmed.includes('ml') || trimmed.includes('milliliter') || trimmed.includes('millilitre')) {
-        // Convert ml to Liter
-        return value / 1000;
-    } else if (trimmed.includes('kg') || trimmed.includes('kilogram')) {
-        // Already in kg
-        return value;
-    } else if (trimmed.includes('liter') || trimmed.includes('litre') || trimmed.includes('l ')) {
-        // Already in Liter
-        return value;
-    } else if (trimmed.includes('pack') || trimmed.includes('pcs') || trimmed.includes('piece')) {
-        // Pack/Piece - return as whole number
-        return Math.round(value);
-    } else {
-        // No unit specified, return value as-is (will be formatted based on product unit)
-        return value;
-    }
-}
-
-// Update quantity by index (handles items with custom prices)
-function updateQuantityByIndex(itemIndex, change) {
-    if (itemIndex < 0 || itemIndex >= cart.length) return;
-    
-    const cartItem = cart[itemIndex];
-    const product = products.find(p => p.id === cartItem.id);
-    const unit = (cartItem.unit || product.unit || 'Kg').toLowerCase();
-    
-    // Determine increment step based on unit type
-    let step = change;
-    if (unit === 'pack' || unit === 'pcs' || unit === 'piece' || unit === 'packs' || unit === 'pieces') {
-        // For Pack/Piece: increment by 1
-        step = change > 0 ? 1 : -1;
-    } else {
-        // For Kg/Liter: increment by 0.1 (100 gm or 100 ml)
-        step = change > 0 ? 0.1 : -0.1;
-    }
-    
-    const newQuantity = Math.max(0, cartItem.quantity + step);
-
-    if (newQuantity <= 0) {
-        cart.splice(itemIndex, 1);
-        updateCart();
-        return;
-    }
-
-    if (product.stock > 0 && newQuantity > product.stock) {
-        showNotification('Not enough stock available', 'error');
-        return;
-    }
-
-    cartItem.quantity = newQuantity;
-    // Ensure unit is preserved
-    if (!cartItem.unit) {
-        cartItem.unit = product.unit || 'Kg';
-    }
-    updateCart();
-}
-
-// Remove from cart by index
 function removeFromCartByIndex(itemIndex) {
-    if (itemIndex >= 0 && itemIndex < cart.length) {
-        cart.splice(itemIndex, 1);
-        updateCart();
-    }
+    if (itemIndex < 0 || itemIndex >= cart.length) return;
+    const item = cart[itemIndex];
+    if (!confirm(`Remove "${item.name}" from cart?`)) return;
+    cart.splice(itemIndex, 1);
+    updateCart();
 }
 
-// Edit cart item price
 function editCartItemPrice(itemIndex) {
     if (itemIndex < 0 || itemIndex >= cart.length) return;
-    
-    const cartItem = cart[itemIndex];
-    // Find the original product to get all available prices
-    const product = products.find(p => p.id === cartItem.id);
-    
-    if (!product) {
-        showNotification('Product not found', 'error');
-        return;
-    }
-    
-    // Show price modal with the cart item's product and current index
+    const product = products.find(p => p.id === cart[itemIndex].id);
+    if (!product) { showNotification('Product not found', 'error'); return; }
     showPriceModal(product, itemIndex);
 }
 
-// Edit cart item quantity
-function editQuantity(itemIndex) {
+function updateQuantityByIndex(itemIndex, change) {
     if (itemIndex < 0 || itemIndex >= cart.length) return;
-    
     const cartItem = cart[itemIndex];
     const product = products.find(p => p.id === cartItem.id);
-    
-    if (!product) {
-        showNotification('Product not found', 'error');
-        return;
-    }
-    
-    editingQuantityItemIndex = itemIndex;
-    
-    const modal = document.getElementById('quantityModal');
-    const productName = document.getElementById('quantityModalProductName');
-    const quantityInput = document.getElementById('quantityInput');
-    const unit = product.unit || 'Kg';
-    
-    productName.textContent = `${product.name} (Unit: ${unit})`;
-    // Pre-fill with current quantity in readable format
-    quantityInput.value = formatQuantity(cartItem.quantity, unit);
-    
-    // Update placeholder and help text based on unit
-    const unitLower = unit.toLowerCase();
-    let placeholder = '';
-    let helpText = '';
-    
-    if (unitLower === 'kg' || unitLower === 'kilogram') {
-        placeholder = 'e.g., 2.5 kg or 500 gm';
-        helpText = 'Examples: 2.5 kg, 500 gm, or just 2';
-    } else if (unitLower === 'liter' || unitLower === 'litre' || unitLower === 'l') {
-        placeholder = 'e.g., 2.5 Liter or 500 ml';
-        helpText = 'Examples: 2.5 Liter, 500 ml, or just 2';
-    } else if (unitLower === 'pack' || unitLower === 'pcs' || unitLower === 'piece') {
-        placeholder = 'e.g., 3 Pack or 5';
-        helpText = `Examples: 3 ${unit}, 5 ${unit}, or just 3`;
-    } else {
-        placeholder = `e.g., 2.5 ${unit} or 2`;
-        helpText = `Examples: 2.5 ${unit}, 2 ${unit}, or just 2`;
-    }
-    
-    quantityInput.placeholder = placeholder;
-    const helpTextEl = modal.querySelector('.modal-body small');
-    if (helpTextEl) {
-        helpTextEl.textContent = helpText;
-    }
-    
-    // Remove old event listener if exists
-    quantityInput.onkeypress = null;
-    
-    // Add Enter key support
-    quantityInput.onkeypress = function(e) {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            confirmQuantitySelection();
-        }
-    };
-    
-    modal.style.display = 'block';
-    // Focus and select the input
-    setTimeout(() => {
-        quantityInput.focus();
-        quantityInput.select();
-    }, 100);
-}
+    const unit = (cartItem.unit || product?.unit || 'Kg').toLowerCase();
 
-// Close quantity modal
-function closeQuantityModal() {
-    const modal = document.getElementById('quantityModal');
-    modal.style.display = 'none';
-    editingQuantityItemIndex = null;
-    const quantityInput = document.getElementById('quantityInput');
-    if (quantityInput) quantityInput.value = '';
-}
+    const isPack = ['pack', 'packs', 'pcs', 'piece', 'pieces'].includes(unit);
+    const step = isPack ? (change > 0 ? 1 : -1) : (change > 0 ? 0.1 : -0.1);
 
-// Confirm quantity selection
-function confirmQuantitySelection() {
-    if (editingQuantityItemIndex === null || editingQuantityItemIndex < 0 || editingQuantityItemIndex >= cart.length) {
+    const newQty = Math.max(0, parseFloat((cartItem.quantity + step).toFixed(3)));
+
+    if (newQty <= 0) {
+        cart.splice(itemIndex, 1);
+        updateCart();
         return;
     }
-    
-    const quantityInput = document.getElementById('quantityInput');
-    const inputValue = quantityInput.value.trim();
-    
-    if (!inputValue) {
-        showNotification('Please enter a quantity', 'error');
-        return;
-    }
-    
-    const cartItem = cart[editingQuantityItemIndex];
-    const product = products.find(p => p.id === cartItem.id);
-    const unit = product.unit || 'Kg';
-    
-    const parsedQuantity = parseQuantity(inputValue, unit);
-    
-    if (parsedQuantity <= 0) {
-        showNotification('Quantity must be greater than 0', 'error');
-        return;
-    }
-    
-    if (product.stock > 0 && parsedQuantity > product.stock) {
+
+    const effectiveStock = product ? getEffectiveStock(product) : 999;
+    if (product?.stock !== 999 && newQty > effectiveStock) {
         showNotification('Not enough stock available', 'error');
         return;
     }
-    
-    cartItem.quantity = parsedQuantity;
-    // Ensure unit is preserved
-    if (!cartItem.unit) {
-        cartItem.unit = unit;
-    }
+
+    cartItem.quantity = newQty;
+    if (!cartItem.unit && product) cartItem.unit = product.unit || 'Kg';
     updateCart();
-    showNotification(`Quantity updated to ${formatQuantity(parsedQuantity, unit)}`, 'success');
-    closeQuantityModal();
 }
 
-// Update cart display
-function updateCart() {
-    if (cart.length === 0) {
-        cartItems.innerHTML = '<div class="empty-cart">Cart is empty</div>';
-        updateSummary();
+// Legacy compat
+function updateQuantity(productId, change) {
+    const idx = cart.findIndex(i => i.id === productId);
+    if (idx >= 0) updateQuantityByIndex(idx, change);
+}
+function removeFromCart(productId) {
+    const idx = cart.findIndex(i => i.id === productId);
+    if (idx >= 0) removeFromCartByIndex(idx);
+}
+
+// ==================== QUANTITY MODAL ====================
+let editingQuantityItemIndex = null;
+
+function editQuantity(itemIndex) {
+    if (itemIndex < 0 || itemIndex >= cart.length) return;
+    const cartItem = cart[itemIndex];
+    const product = products.find(p => p.id === cartItem.id);
+    if (!product) return;
+
+    editingQuantityItemIndex = itemIndex;
+    const modal = document.getElementById('quantityModal');
+    const unit = product.unit || 'Kg';
+    document.getElementById('quantityModalProductName').textContent = `${product.name} (Unit: ${unit})`;
+
+    const input = document.getElementById('quantityInput');
+    input.value = formatQuantity(cartItem.quantity, unit);
+
+    const unitLower = unit.toLowerCase();
+    if (unitLower === 'kg' || unitLower === 'kilogram') {
+        input.placeholder = 'e.g., 2.5 kg or 500 gm';
+    } else if (unitLower === 'liter' || unitLower === 'litre' || unitLower === 'l') {
+        input.placeholder = 'e.g., 2.5 Liter or 500 ml';
+    } else {
+        input.placeholder = `e.g., 3 ${unit}`;
+    }
+
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); confirmQuantitySelection(); } };
+    modal.style.display = 'block';
+    setTimeout(() => { input.focus(); input.select(); }, 100);
+}
+
+function closeQuantityModal() {
+    const modal = document.getElementById('quantityModal');
+    if (modal) modal.style.display = 'none';
+    editingQuantityItemIndex = null;
+    const input = document.getElementById('quantityInput');
+    if (input) input.value = '';
+}
+
+function confirmQuantitySelection() {
+    if (editingQuantityItemIndex === null) return;
+    const input = document.getElementById('quantityInput');
+    const val = input.value.trim();
+    if (!val) { showNotification('Please enter a quantity', 'error'); return; }
+
+    const cartItem = cart[editingQuantityItemIndex];
+    const product = products.find(p => p.id === cartItem.id);
+    const unit = product?.unit || 'Kg';
+    const qty = parseQuantity(val, unit);
+
+    if (qty <= 0) { showNotification('Quantity must be greater than 0', 'error'); return; }
+
+    const effectiveStock = product ? getEffectiveStock(product) : 999;
+    if (product?.stock !== 999 && qty > effectiveStock) {
+        showNotification('Not enough stock available', 'error');
         return;
     }
 
-    cartItems.innerHTML = cart.map((item, index) => {
-        // Check if this item has a custom price
-        const hasCustomPrice = item.customPrice && item.customPrice !== item.originalPrice;
-        const priceDisplay = hasCustomPrice ? 
-            `<p>Rs.${item.price.toFixed(2)} each <span style="color: #ff9800; font-size: 0.85em;">(Custom)</span></p>` :
-            `<p>Rs.${item.price.toFixed(2)} each</p>`;
-        
-        // Use a unique key for items with same ID but different prices
-        const itemKey = hasCustomPrice ? `${item.id}_${item.price}_${index}` : item.id;
-        
-        return `
-        <div class="cart-item" data-item-key="${itemKey}">
-            <div class="cart-item-info">
-                <h4>${item.name}</h4>
-                ${priceDisplay}
-            </div>
-            <div class="cart-item-controls">
-                <button class="btn-quantity" onclick="updateQuantityByIndex(${index}, -1)">-</button>
-                <span class="quantity" onclick="editQuantity(${index})" style="cursor: pointer; padding: 5px; border-radius: 4px; min-width: 80px; user-select: none;" title="Click to edit quantity">${formatQuantity(item.quantity, item.unit || 'Kg')}</span>
-                <button class="btn-quantity" onclick="updateQuantityByIndex(${index}, 1)">+</button>
-                <button class="btn-edit" onclick="editCartItemPrice(${index})" title="Change Price">✎</button>
-                <button class="btn-remove" onclick="removeFromCartByIndex(${index})">×</button>
-            </div>
-            <div class="cart-item-total">
-                Rs.${(item.price * item.quantity).toFixed(2)}
-            </div>
-        </div>
-    `;
-    }).join('');
+    cartItem.quantity = qty;
+    if (!cartItem.unit) cartItem.unit = unit;
+    updateCart();
+    showNotification(`Quantity updated to ${formatQuantity(qty, unit)}`, 'success');
+    closeQuantityModal();
+}
 
+// ==================== QUANTITY FORMAT/PARSE ====================
+function formatQuantity(quantity, unit = 'Kg') {
+    if (quantity <= 0) return '0';
+    const u = String(unit).toLowerCase().trim();
+    if (u === 'kg' || u === 'kilogram' || u === 'kgs') {
+        return quantity >= 1
+            ? `${quantity.toFixed(quantity % 1 === 0 ? 0 : 2)} kg`
+            : `${Math.round(quantity * 1000)} gm`;
+    }
+    if (u === 'liter' || u === 'litre' || u === 'l' || u === 'liters' || u === 'litres') {
+        return quantity >= 1
+            ? `${quantity.toFixed(quantity % 1 === 0 ? 0 : 2)} Liter`
+            : `${Math.round(quantity * 1000)} ml`;
+    }
+    if (u === 'pack' || u === 'packs' || u === 'pcs' || u === 'piece' || u === 'pieces') {
+        return `${Math.round(quantity)} ${String(unit).trim()}`;
+    }
+    return `${quantity.toFixed(quantity % 1 === 0 ? 0 : 2)} ${String(unit).trim()}`;
+}
+
+function parseQuantity(input, unit = 'Kg') {
+    if (!input || typeof input !== 'string') return parseFloat(input) || 0;
+    const t = input.trim().toLowerCase();
+    const m = t.match(/^([\d.]+)/);
+    if (!m) return 0;
+    const v = parseFloat(m[1]);
+    if (isNaN(v)) return 0;
+    if (t.includes('gm') || t.includes('gram')) return v / 1000;
+    if (t.includes('ml') || t.includes('milliliter') || t.includes('millilitre')) return v / 1000;
+    if (t.includes('kg') || t.includes('kilogram')) return v;
+    if (t.includes('liter') || t.includes('litre')) return v;
+    return v;
+}
+
+// ==================== UPDATE CART DISPLAY ====================
+function updateCart() {
+    if (cart.length === 0) {
+        cartItems.innerHTML = '<div class="empty-cart">Cart is empty</div>';
+    } else {
+        cartItems.innerHTML = cart.map((item, index) => {
+            const hasCustom = item.customPrice && item.customPrice !== item.originalPrice;
+            const priceDisplay = hasCustom
+                ? `Rs.${item.price.toFixed(2)} <span style="color:var(--warning);font-size:0.8em">(Custom)</span>`
+                : `Rs.${item.price.toFixed(2)}`;
+
+            return `
+            <div class="cart-item">
+                <div class="cart-item-info">
+                    <h4>${escapeHtml(item.name)}</h4>
+                    <p>${priceDisplay} each</p>
+                </div>
+                <div class="cart-item-controls">
+                    <button class="btn-quantity" onclick="updateQuantityByIndex(${index}, -1)">−</button>
+                    <span class="quantity" onclick="editQuantity(${index})" title="Click to edit">${escapeHtml(formatQuantity(item.quantity, item.unit || 'Kg'))}</span>
+                    <button class="btn-quantity" onclick="updateQuantityByIndex(${index}, 1)">+</button>
+                    <button class="btn-edit" onclick="editCartItemPrice(${index})" title="Change Price">✎</button>
+                    <button class="btn-remove" onclick="removeFromCartByIndex(${index})">×</button>
+                </div>
+                <div class="cart-item-total">Rs.${(item.price * item.quantity).toFixed(2)}</div>
+            </div>`;
+        }).join('');
+    }
+
+    updateCartBadge();
     updateSummary();
 }
 
-// Update summary
-function updateSummary() {
-    const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-
-    totalEl.textContent = `Rs.${total.toFixed(2)}`;
+function updateCartBadge() {
+    const badge = document.getElementById('cartBadge');
+    if (badge) {
+        badge.textContent = cart.length;
+        badge.style.display = cart.length > 0 ? 'inline-flex' : 'none';
+    }
 }
 
-// Clear cart
+function getDiscountAmount(subtotal) {
+    const amountInput = document.getElementById('discountAmount');
+    const typeInput = document.getElementById('discountType');
+    const amount = parseFloat(amountInput?.value || 0) || 0;
+    const type = typeInput?.value || 'flat';
+    if (amount <= 0) return 0;
+    if (type === 'percent') return Math.min(subtotal, subtotal * (amount / 100));
+    return Math.min(subtotal, amount);
+}
+
+function updateSummary() {
+    const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const discount = getDiscountAmount(subtotal);
+    const total = subtotal - discount;
+
+    if (subtotalEl) subtotalEl.textContent = `Rs.${subtotal.toFixed(2)}`;
+
+    const discountRow = document.getElementById('discountRow');
+    const discountDisplay = document.getElementById('discountDisplay');
+    if (discountRow && discountDisplay) {
+        if (discount > 0) {
+            discountRow.style.display = 'flex';
+            discountDisplay.textContent = `-Rs.${discount.toFixed(2)}`;
+        } else {
+            discountRow.style.display = 'none';
+        }
+    }
+
+    if (totalEl) totalEl.textContent = `Rs.${total.toFixed(2)}`;
+}
+
 function clearCart() {
     if (cart.length === 0) return;
-    
-    if (confirm('Are you sure you want to clear the cart?')) {
+    if (confirm('Clear the entire cart?')) {
         cart = [];
+        const discount = document.getElementById('discountAmount');
+        if (discount) discount.value = '';
+        const customer = document.getElementById('customerNameInput');
+        if (customer) customer.value = '';
+        const phone = document.getElementById('customerPhoneInput');
+        if (phone) phone.value = '';
+        const credit = document.getElementById('creditToggle');
+        if (credit) credit.checked = false;
         updateCart();
         showNotification('Cart cleared', 'info');
     }
 }
 
-// Checkout
-// Language selection state
+// ==================== CHECKOUT ====================
 let selectedReceiptLanguage = 'english';
+let pendingCheckoutData = null;
 
-// Show language selection modal
 function showLanguageModal() {
-    const modal = document.getElementById('languageModal');
-    modal.style.display = 'block';
+    document.getElementById('languageModal').style.display = 'block';
 }
 
-// Close language modal
 function closeLanguageModal() {
-    const modal = document.getElementById('languageModal');
-    modal.style.display = 'none';
+    const m = document.getElementById('languageModal');
+    if (m) m.style.display = 'none';
 }
 
-// Select language and proceed with checkout
 function selectLanguage(language) {
     selectedReceiptLanguage = language;
     closeLanguageModal();
-    proceedWithCheckout();
-}
-
-// Proceed with checkout after language selection
-function proceedWithCheckout() {
-    const receipt = generateReceipt(selectedReceiptLanguage);
-    
-    // Show receipt in a new window or print
-    const receiptWindow = window.open('', '_blank');
-    receiptWindow.document.write(receipt);
-    receiptWindow.document.close();
-    receiptWindow.print();
-
-    // Clear cart after checkout
-    cart = [];
-    updateCart();
-    showNotification('Checkout completed successfully!', 'success');
+    if (pendingCheckoutData) {
+        finishCheckout(pendingCheckoutData);
+        pendingCheckoutData = null;
+    }
 }
 
 function checkout() {
-    if (cart.length === 0) {
-        showNotification('Cart is empty', 'error');
-        return;
-    }
+    if (cart.length === 0) { showNotification('Cart is empty', 'error'); return; }
 
-    // Show language selection modal first
+    const subtotal = cart.reduce((sum, i) => sum + i.price * i.quantity, 0);
+    const discount = getDiscountAmount(subtotal);
+    const total = subtotal - discount;
+    const customerName = (document.getElementById('customerNameInput')?.value || '').trim();
+    const customerPhone = (document.getElementById('customerPhoneInput')?.value || '').trim();
+    const isCredit = document.getElementById('creditToggle')?.checked || false;
+
+    pendingCheckoutData = {
+        cartSnapshot: [...cart.map(i => ({ ...i }))],
+        subtotal,
+        discount,
+        total,
+        customerName,
+        customerPhone,
+        isCredit
+    };
+
     showLanguageModal();
 }
 
-// Generate receipt with language support
-function generateReceipt(language = 'english') {
-    const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const date = new Date().toLocaleString();
+async function finishCheckout(data) {
+    const receipt = generateReceipt(selectedReceiptLanguage, data);
 
-    // Language translations
-    const translations = {
-        english: {
-            receipt: 'Receipt',
-            date: 'Date',
-            item: 'Item',
-            quantity: 'Quantity',
-            price: 'Price',
-            total: 'Total',
-            thankYou: 'Thank you for your purchase!'
-        },
-        urdu: {
-            receipt: 'رسید',
-            date: 'تاریخ',
-            item: 'آئٹم',
-            quantity: 'مقدار',
-            price: 'قیمت',
-            total: 'کل',
-            thankYou: 'آپ کی خریداری کا شکریہ!'
-        }
+    // Save transaction
+    const tx = {
+        id: Date.now(),
+        date: new Date().toISOString(),
+        items: data.cartSnapshot,
+        subtotal: data.subtotal,
+        discount: data.discount,
+        total: data.total,
+        customerName: data.customerName,
+        customerPhone: data.customerPhone,
+        isCredit: data.isCredit,
+        language: selectedReceiptLanguage
     };
 
-    const t = translations[language] || translations.english;
-    const isUrdu = language === 'urdu';
-    const fontFamily = isUrdu ? 'Arial, "Noto Nastaliq Urdu", "Al Qalam Taj Nastaliq", sans-serif' : 'Arial, sans-serif';
-    const textAlign = isUrdu ? 'right' : 'left';
+    // Decrement stock
+    decrementStockForCart(data.cartSnapshot);
+    // Refresh product display to show updated stock
+    displayProducts(getFilteredProducts());
 
-    return `
-        <!DOCTYPE html>
-        <html dir="${isUrdu ? 'rtl' : 'ltr'}">
-        <head>
-            <meta charset="UTF-8">
-            <title>${t.receipt}</title>
-            <style>
-                body { font-family: ${fontFamily}; padding: 20px; direction: ${isUrdu ? 'rtl' : 'ltr'}; }
-                h1 { text-align: center; }
-                table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-                th, td { padding: 8px; text-align: ${textAlign}; border-bottom: 1px solid #ddd; }
-                th { background-color: #f2f2f2; }
-                .total { font-weight: bold; font-size: 1.2em; }
-                .right { text-align: ${isUrdu ? 'left' : 'right'}; }
-            </style>
-        </head>
-        <body>
-            <h1>${t.receipt}</h1>
-            <p><strong>${t.date}:</strong> ${date}</p>
-            <table>
-                <thead>
-                    <tr>
-                        <th>${t.item}</th>
-                        <th>${t.quantity}</th>
-                        <th>${t.price}</th>
-                        <th>${t.total}</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${cart.map(item => {
-                        const itemName = isUrdu && item.nameUrdu ? item.nameUrdu : item.name;
-                        return `
-                        <tr>
-                            <td>${itemName}</td>
-                            <td>${formatQuantity(item.quantity, item.unit || 'Kg')}</td>
-                            <td>Rs.${item.price.toFixed(2)}</td>
-                            <td>Rs.${(item.price * item.quantity).toFixed(2)}</td>
-                        </tr>
-                    `;
-                    }).join('')}
-                </tbody>
-                <tfoot>
-                    <tr class="total">
-                        <td colspan="3" class="right">${t.total}:</td>
-                        <td>Rs.${total.toFixed(2)}</td>
-                    </tr>
-                </tfoot>
-            </table>
-            <p style="text-align: center; margin-top: 30px;">${t.thankYou}</p>
-        </body>
-        </html>
-    `;
+    // Save customer if provided
+    if (data.customerName) await ensureCustomer(data.customerName, data.customerPhone);
+
+    // Persist transaction
+    await persistTransaction(tx);
+
+    // Print receipt
+    const win = window.open('', '_blank');
+    win.document.write(receipt);
+    win.document.close();
+    win.print();
+
+    // Clear cart
+    cart = [];
+    const discount = document.getElementById('discountAmount');
+    if (discount) discount.value = '';
+    const customerName = document.getElementById('customerNameInput');
+    if (customerName) customerName.value = '';
+    const customerPhone = document.getElementById('customerPhoneInput');
+    if (customerPhone) customerPhone.value = '';
+    const creditToggle = document.getElementById('creditToggle');
+    if (creditToggle) creditToggle.checked = false;
+
+    updateCart();
+    showNotification(`Checkout complete! Total: Rs.${data.total.toFixed(2)}${data.isCredit ? ' (Khata)' : ''}`, 'success');
 }
 
-// Show notification
+// ==================== RECEIPT ====================
+function generateReceipt(language = 'english', data = null) {
+    const cartData = data ? data.cartSnapshot : cart;
+    const subtotal = data ? data.subtotal : cart.reduce((s, i) => s + i.price * i.quantity, 0);
+    const discount = data ? data.discount : 0;
+    const total = data ? data.total : subtotal;
+    const customerName = data?.customerName || '';
+    const isCredit = data?.isCredit || false;
+    const date = new Date().toLocaleString();
+
+    const t = language === 'urdu' ? {
+        storeName: settings.storeName,
+        receipt: 'رسید', date: 'تاریخ', customer: 'گاہک',
+        item: 'آئٹم', quantity: 'مقدار', price: 'قیمت', total: 'کل',
+        subtotal: 'ذیلی کل', discount: 'رعایت', thankYou: 'آپ کی خریداری کا شکریہ!',
+        credit: 'ادھار (خاتہ)'
+    } : {
+        storeName: settings.storeName,
+        receipt: 'Receipt', date: 'Date', customer: 'Customer',
+        item: 'Item', quantity: 'Quantity', price: 'Price', total: 'Total',
+        subtotal: 'Subtotal', discount: 'Discount', thankYou: 'Thank you for your purchase!',
+        credit: 'Credit (Khata)'
+    };
+
+    const isUrdu = language === 'urdu';
+    const dir = isUrdu ? 'rtl' : 'ltr';
+    const font = isUrdu ? 'Arial, "Noto Nastaliq Urdu", sans-serif' : 'Arial, sans-serif';
+
+    return `<!DOCTYPE html>
+<html dir="${dir}">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(t.receipt)}</title>
+<style>
+  body { font-family: ${font}; padding: 20px; direction: ${dir}; max-width: 600px; margin: 0 auto; }
+  h1 { text-align: center; font-size: 24px; margin-bottom: 4px; }
+  .store-sub { text-align: center; color: #666; font-size: 13px; margin-bottom: 16px; }
+  .meta { font-size: 13px; margin-bottom: 16px; }
+  .meta p { margin: 3px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td { padding: 8px; text-align: ${isUrdu ? 'right' : 'left'}; border-bottom: 1px solid #ddd; font-size: 13px; }
+  th { background: #f2f2f2; font-weight: bold; }
+  .total-row td { font-weight: bold; font-size: 15px; border-top: 2px solid #333; }
+  .credit-badge { background: #ff9800; color: white; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: bold; }
+  .footer { text-align: center; margin-top: 24px; color: #555; font-size: 13px; }
+  @media print { body { padding: 10px; } }
+</style>
+</head>
+<body>
+  <h1>${escapeHtml(t.storeName)}</h1>
+  ${settings.storeAddress ? `<div class="store-sub">${escapeHtml(settings.storeAddress)}</div>` : ''}
+  ${settings.storePhone ? `<div class="store-sub">${escapeHtml(settings.storePhone)}</div>` : ''}
+  <div class="meta">
+    <p><strong>${t.date}:</strong> ${date}</p>
+    ${customerName ? `<p><strong>${t.customer}:</strong> ${escapeHtml(customerName)}</p>` : ''}
+    ${isCredit ? `<p><span class="credit-badge">${t.credit}</span></p>` : ''}
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>${t.item}</th>
+        <th>${t.quantity}</th>
+        <th>${t.price}</th>
+        <th>${t.total}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${cartData.map(item => {
+        const name = escapeHtml(isUrdu && item.nameUrdu ? item.nameUrdu : item.name);
+        const qty = escapeHtml(formatQuantity(item.quantity, item.unit || 'Kg'));
+        return `<tr>
+          <td>${name}</td>
+          <td>${qty}</td>
+          <td>Rs.${item.price.toFixed(2)}</td>
+          <td>Rs.${(item.price * item.quantity).toFixed(2)}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+    <tfoot>
+      ${discount > 0 ? `<tr><td colspan="3" style="text-align:${isUrdu ? 'left' : 'right'}">${t.subtotal}:</td><td>Rs.${subtotal.toFixed(2)}</td></tr>
+      <tr><td colspan="3" style="text-align:${isUrdu ? 'left' : 'right'};color:green">${t.discount}:</td><td style="color:green">-Rs.${discount.toFixed(2)}</td></tr>` : ''}
+      <tr class="total-row">
+        <td colspan="3" style="text-align:${isUrdu ? 'left' : 'right'}">${t.total}:</td>
+        <td>Rs.${total.toFixed(2)}</td>
+      </tr>
+    </tfoot>
+  </table>
+  <div class="footer">${t.thankYou}</div>
+</body>
+</html>`;
+}
+
+// ==================== REPORTS ====================
+function renderReports() {
+    const filter = document.getElementById('reportFilter')?.value || 'all';
+    const now = new Date();
+
+    const filtered = transactions.filter(tx => {
+        const d = new Date(tx.date);
+        if (filter === 'today') return d.toDateString() === now.toDateString();
+        if (filter === 'week') {
+            const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay());
+            return d >= weekStart;
+        }
+        if (filter === 'month') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        return true;
+    });
+
+    // Today stats (always today)
+    const today = transactions.filter(tx => new Date(tx.date).toDateString() === now.toDateString());
+    const todayRevenue = today.filter(t => !t.isCredit).reduce((s, t) => s + t.total, 0);
+    const todayCredit = today.filter(t => t.isCredit).reduce((s, t) => s + t.total, 0);
+    const todayCount = today.filter(t => !t.isCredit).length;
+    const todayCreditCount = today.filter(t => t.isCredit).length;
+
+    // All-time
+    const allRevenue = transactions.filter(t => !t.isCredit).reduce((s, t) => s + t.total, 0);
+    const outstanding = transactions.filter(t => t.isCredit).reduce((s, t) => s + t.total, 0);
+
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('todayRevenue', `Rs.${todayRevenue.toFixed(2)}`);
+    set('todayCount', `${todayCount} sale${todayCount !== 1 ? 's' : ''}`);
+    set('todayCredit', `Rs.${todayCredit.toFixed(2)}`);
+    set('todayCreditCount', `${todayCreditCount} credit sale${todayCreditCount !== 1 ? 's' : ''}`);
+    set('allTimeRevenue', `Rs.${allRevenue.toFixed(2)}`);
+    set('allTimeCount', `${transactions.length} transaction${transactions.length !== 1 ? 's' : ''}`);
+    set('outstandingKhata', `Rs.${outstanding.toFixed(2)}`);
+
+    // Transaction table
+    const tbody = document.getElementById('transactionsBody');
+    if (!tbody) return;
+
+    if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-muted)">No transactions found</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = filtered.map((tx, i) => {
+        const date = new Date(tx.date).toLocaleString();
+        const itemSummary = tx.items.slice(0, 2).map(item => `${escapeHtml(item.name)} ×${formatQuantity(item.quantity, item.unit || 'Kg')}`).join(', ');
+        const moreItems = tx.items.length > 2 ? ` +${tx.items.length - 2} more` : '';
+        const realIndex = transactions.indexOf(tx);
+
+        return `<tr>
+            <td>${date}</td>
+            <td>${escapeHtml(tx.customerName || '—')}</td>
+            <td>
+                ${itemSummary}${moreItems}
+                <div class="transaction-items-list">${tx.items.length} item${tx.items.length !== 1 ? 's' : ''}</div>
+            </td>
+            <td>${tx.discount > 0 ? `-Rs.${tx.discount.toFixed(2)}` : '—'}</td>
+            <td><strong>Rs.${tx.total.toFixed(2)}</strong></td>
+            <td>${tx.isCredit ? '<span class="badge-credit">Khata</span>' : '<span class="badge-cash">Cash</span>'}</td>
+            <td class="transaction-actions">
+                <button class="btn-reprint" onclick="viewTransaction(${realIndex})">View</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+function viewTransaction(txIndex) {
+    const tx = transactions[txIndex];
+    if (!tx) return;
+    viewingTransactionIndex = txIndex;
+
+    const body = document.getElementById('receiptDetailBody');
+    if (!body) return;
+
+    const date = new Date(tx.date).toLocaleString();
+    body.innerHTML = `
+        <p><strong>Date:</strong> ${date}</p>
+        ${tx.customerName ? `<p><strong>Customer:</strong> ${escapeHtml(tx.customerName)}${tx.customerPhone ? ` (${escapeHtml(tx.customerPhone)})` : ''}</p>` : ''}
+        <p><strong>Type:</strong> ${tx.isCredit ? '<span class="badge-credit">Khata / Credit</span>' : '<span class="badge-cash">Cash</span>'}</p>
+        <table class="receipt-detail-table">
+            <thead>
+                <tr><th>Item</th><th>Qty</th><th>Price</th><th>Total</th></tr>
+            </thead>
+            <tbody>
+                ${tx.items.map(item => `<tr>
+                    <td>${escapeHtml(item.name)}</td>
+                    <td>${escapeHtml(formatQuantity(item.quantity, item.unit || 'Kg'))}</td>
+                    <td>Rs.${item.price.toFixed(2)}</td>
+                    <td>Rs.${(item.price * item.quantity).toFixed(2)}</td>
+                </tr>`).join('')}
+            </tbody>
+            <tfoot>
+                ${tx.discount > 0 ? `
+                <tr><td colspan="3"><strong>Subtotal</strong></td><td>Rs.${tx.subtotal.toFixed(2)}</td></tr>
+                <tr><td colspan="3" style="color:green"><strong>Discount</strong></td><td style="color:green">-Rs.${tx.discount.toFixed(2)}</td></tr>` : ''}
+                <tr><td colspan="3"><strong>Total</strong></td><td><strong>Rs.${tx.total.toFixed(2)}</strong></td></tr>
+            </tfoot>
+        </table>`;
+
+    document.getElementById('receiptDetailModal').style.display = 'block';
+}
+
+function closeReceiptDetailModal() {
+    const m = document.getElementById('receiptDetailModal');
+    if (m) m.style.display = 'none';
+    viewingTransactionIndex = null;
+}
+
+function reprintReceipt() {
+    if (viewingTransactionIndex === null) return;
+    const tx = transactions[viewingTransactionIndex];
+    if (!tx) return;
+    const receipt = generateReceipt(tx.language || 'english', tx);
+    const win = window.open('', '_blank');
+    win.document.write(receipt);
+    win.document.close();
+    win.print();
+}
+
+// Report filter change
+document.addEventListener('DOMContentLoaded', () => {
+    // reportFilter listener added after DOM ready
+    setTimeout(() => {
+        const rf = document.getElementById('reportFilter');
+        if (rf) rf.addEventListener('change', renderReports);
+    }, 0);
+});
+
+// ==================== EXPORT TO EXCEL ====================
+function exportTransactionsToExcel() {
+    if (transactions.length === 0) {
+        showNotification('No transactions to export', 'error');
+        return;
+    }
+
+    const rows = [];
+    transactions.forEach(tx => {
+        tx.items.forEach(item => {
+            rows.push({
+                'Date': new Date(tx.date).toLocaleString(),
+                'Transaction ID': tx.id,
+                'Customer': tx.customerName || '',
+                'Phone': tx.customerPhone || '',
+                'Item': item.name,
+                'Item (Urdu)': item.nameUrdu || '',
+                'Quantity': formatQuantity(item.quantity, item.unit || 'Kg'),
+                'Unit Price (Rs)': item.price.toFixed(2),
+                'Item Total (Rs)': (item.price * item.quantity).toFixed(2),
+                'Subtotal (Rs)': tx.subtotal.toFixed(2),
+                'Discount (Rs)': (tx.discount || 0).toFixed(2),
+                'Total (Rs)': tx.total.toFixed(2),
+                'Type': tx.isCredit ? 'Khata/Credit' : 'Cash'
+            });
+        });
+    });
+
+    try {
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
+
+        // Export via blob download (works in Electron)
+        const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+        const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `pos_transactions_${new Date().toISOString().split('T')[0]}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showNotification('Exported to Excel successfully!', 'success');
+    } catch (err) {
+        showNotification('Export failed: ' + err.message, 'error');
+    }
+}
+
+// ==================== NOTIFICATIONS ====================
 function showNotification(message, type = 'info') {
+    if (!notification) return;
     notification.textContent = message;
     notification.className = `notification ${type} show`;
-    
-    setTimeout(() => {
-        notification.classList.remove('show');
-    }, 3000);
+    setTimeout(() => notification.classList.remove('show'), 3500);
 }
 
-// Make functions available globally for onclick handlers
+// ==================== GLOBAL EXPORTS ====================
 window.addToCart = addToCart;
+window.selectPrice = selectPrice;
+window.closePriceModal = closePriceModal;
+window.confirmPriceSelection = confirmPriceSelection;
 window.removeFromCart = removeFromCart;
 window.updateQuantity = updateQuantity;
 window.updateQuantityByIndex = updateQuantityByIndex;
@@ -1658,4 +1430,9 @@ window.closeQuantityModal = closeQuantityModal;
 window.confirmQuantitySelection = confirmQuantitySelection;
 window.selectLanguage = selectLanguage;
 window.closeLanguageModal = closeLanguageModal;
-
+window.saveSettingsFromForm = saveSettingsFromForm;
+window.resetStockOverrides = resetStockOverrides;
+window.exportTransactionsToExcel = exportTransactionsToExcel;
+window.viewTransaction = viewTransaction;
+window.closeReceiptDetailModal = closeReceiptDetailModal;
+window.reprintReceipt = reprintReceipt;
