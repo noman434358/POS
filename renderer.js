@@ -337,8 +337,6 @@ function applyDarkMode() {
     document.body.classList.toggle('dark-mode', settings.darkMode);
     const btn = document.getElementById('darkModeBtn');
     if (btn) btn.textContent = settings.darkMode ? '☀️' : '🌙';
-    const toggle = document.getElementById('settingsDarkMode');
-    if (toggle) toggle.checked = settings.darkMode;
 }
 
 function toggleDarkMode() {
@@ -356,8 +354,6 @@ function populateSettingsForm() {
     set('settingsLowStockThreshold', settings.lowStockThreshold);
     const lang = document.getElementById('settingsLanguage');
     if (lang) lang.value = settings.language === 'urdu' ? 'urdu' : 'english';
-    const dm = document.getElementById('settingsDarkMode');
-    if (dm) dm.checked = settings.darkMode;
 }
 
 function saveSettingsFromForm() {
@@ -369,8 +365,6 @@ function saveSettingsFromForm() {
     settings.lowStockThreshold = parseInt(get('settingsLowStockThreshold')) || 5;
     const lang = document.getElementById('settingsLanguage');
     settings.language = lang?.value === 'urdu' ? 'urdu' : 'english';
-    const dm = document.getElementById('settingsDarkMode');
-    settings.darkMode = dm ? dm.checked : false;
     saveSettings();
     applyDarkMode();
     applyLanguage();
