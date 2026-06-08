@@ -42,13 +42,290 @@ let settings = {
     storePhone: '',
     defaultPriceTier: 'parchon',
     lowStockThreshold: 5,
-    darkMode: false
+    darkMode: false,
+    language: 'english'
 };
+
+// ==================== UI TRANSLATIONS ====================
+const I18N = {
+    english: {
+        appTitle: 'Point of Sale System',
+        refreshProducts: 'Refresh Products',
+        chooseLocalFile: 'Choose Local File',
+        excelUrlPh: 'Excel File URL',
+        darkModeTitle: 'Toggle Dark Mode',
+        navPos: '🛒 POS',
+        navReports: '📊 Reports',
+        navSettings: '⚙️ Settings',
+        products: 'Products',
+        searchPh: 'Search or scan barcode...',
+        cart: 'Cart',
+        clear: 'Clear',
+        customerNamePh: 'Customer name (optional)',
+        customerPhonePh: 'Phone (optional)',
+        discount: 'Discount:',
+        discountFlat: 'Rs. Flat',
+        discountPercent: '% Percent',
+        creditLabel: 'Mark as Khata / Credit',
+        subtotal: 'Subtotal:',
+        discountSummary: 'Discount:',
+        total: 'Total:',
+        checkout: 'Checkout',
+        salesReports: 'Sales Reports',
+        filterAll: 'All Time',
+        filterToday: 'Today',
+        filterWeek: 'This Week',
+        filterMonth: 'This Month',
+        exportExcel: 'Export Excel',
+        todayRevenue: "Today's Revenue",
+        todayCredit: "Today's Credit (Khata)",
+        allTimeRevenue: 'Total Revenue (All Time)',
+        outstandingKhata: 'Outstanding Khata',
+        totalUnpaidCredit: 'Total unpaid credit',
+        transactionHistory: 'Transaction History',
+        thDate: 'Date & Time',
+        thCustomer: 'Customer',
+        thItems: 'Items',
+        thDiscount: 'Discount',
+        thTotal: 'Total',
+        thType: 'Type',
+        thAction: 'Action',
+        noTransactionsYet: 'No transactions yet',
+        settings: 'Settings',
+        storeInformation: 'Store Information',
+        storeName: 'Store Name',
+        storeAddress: 'Store Address',
+        phoneNumber: 'Phone Number',
+        pricing: 'Pricing',
+        defaultPriceTier: 'Default Price Tier',
+        tierParchon: 'Parchon',
+        tierGatta: 'Gatta',
+        tierWholesale: 'Wholesale',
+        lowStockThreshold: 'Low Stock Warning Threshold',
+        languageSettings: 'Language',
+        appLanguage: 'App Language',
+        appearance: 'Appearance',
+        darkMode: 'Dark Mode',
+        stockManagement: 'Stock Management',
+        stockTracked: 'Stock is tracked and decremented after each checkout.',
+        resetStock: 'Reset Stock to Excel Values',
+        saveSettings: 'Save Settings',
+        selectReceiptLanguage: 'Select Receipt Language',
+        chooseReceiptLang: 'Choose language for receipt:',
+        printEnglish: 'Print receipt in English',
+        printUrdu: 'Print receipt in Urdu',
+        selectPrice: 'Select Price',
+        changePrice: 'Change Price',
+        customPriceLabel: 'Or Enter Custom Price:',
+        cancel: 'Cancel',
+        addToCart: 'Add to Cart',
+        updatePrice: 'Update Price',
+        enterQuantity: 'Enter Quantity',
+        enterQtyLabel: 'Enter quantity:',
+        qtyExamples: 'Examples: 2.5 kg, 500 gm, 1.5 kgs, or just 2',
+        updateQuantity: 'Update Quantity',
+        transactionDetails: 'Transaction Details',
+        close: 'Close',
+        reprintReceipt: 'Reprint Receipt',
+        loadingProducts: 'Loading products...',
+        cartEmptyMsg: 'Cart is empty',
+        cartEmpty: 'Cart is empty',
+        noProducts: 'No products found',
+        outOfStock: 'Out of Stock',
+        addToCartBtn: 'Add to Cart',
+        lowStock: 'Low Stock',
+        inStock: 'In Stock',
+        stock: 'Stock:',
+        each: 'each',
+        custom: 'Custom',
+        view: 'View',
+        noTransactionsFound: 'No transactions found',
+        badgeKhata: 'Khata',
+        badgeCash: 'Cash',
+        settingsSaved: 'Settings saved!',
+        stockReset: 'Stock reset to Excel values',
+        resetStockConfirm: 'This will reset all stock back to original Excel values. Continue?',
+        clearCartConfirm: 'Clear the entire cart?',
+        cartCleared: 'Cart cleared',
+        checkoutComplete: 'Checkout complete! Total: Rs.{total}{credit}',
+        creditSuffix: ' (Khata)',
+        parchonPrice: 'Parchon Price',
+        gattaPrice: 'Gatta Price',
+        wholesalePrice: 'Wholesale Price'
+    },
+    urdu: {
+        appTitle: 'پوائنٹ آف سیل سسٹم',
+        refreshProducts: 'مصنوعات تازہ کریں',
+        chooseLocalFile: 'مقامی فائل منتخب کریں',
+        excelUrlPh: 'ایکسل فائل کا لنک',
+        darkModeTitle: 'ڈارک موڈ تبدیل کریں',
+        navPos: '🛒 پوز',
+        navReports: '📊 رپورٹس',
+        navSettings: '⚙️ ترتیبات',
+        products: 'مصنوعات',
+        searchPh: 'تلاش کریں یا بارکوڈ سکین کریں...',
+        cart: 'ٹوکری',
+        clear: 'صاف کریں',
+        customerNamePh: 'گاہک کا نام (اختیاری)',
+        customerPhonePh: 'فون (اختیاری)',
+        discount: 'رعایت:',
+        discountFlat: 'روپے فلیٹ',
+        discountPercent: '% فیصد',
+        creditLabel: 'خاتہ / ادھار کے طور پر نشان زد کریں',
+        subtotal: 'ذیلی کل:',
+        discountSummary: 'رعایت:',
+        total: 'کل:',
+        checkout: 'چیک آؤٹ',
+        salesReports: 'فروخت کی رپورٹس',
+        filterAll: 'تمام وقت',
+        filterToday: 'آج',
+        filterWeek: 'اس ہفتے',
+        filterMonth: 'اس ماہ',
+        exportExcel: 'ایکسل برآمد کریں',
+        todayRevenue: 'آج کی آمدنی',
+        todayCredit: 'آج کا ادھار (خاتہ)',
+        allTimeRevenue: 'کل آمدنی',
+        outstandingKhata: 'باقی خاتہ',
+        totalUnpaidCredit: 'کل غیر ادا شدہ ادھار',
+        transactionHistory: 'لین دین کی تاریخ',
+        thDate: 'تاریخ و وقت',
+        thCustomer: 'گاہک',
+        thItems: 'اشیاء',
+        thDiscount: 'رعایت',
+        thTotal: 'کل',
+        thType: 'قسم',
+        thAction: 'عمل',
+        noTransactionsYet: 'ابھی کوئی لین دین نہیں',
+        settings: 'ترتیبات',
+        storeInformation: 'اسٹور کی معلومات',
+        storeName: 'اسٹور کا نام',
+        storeAddress: 'اسٹور کا پتہ',
+        phoneNumber: 'فون نمبر',
+        pricing: 'قیمتیں',
+        defaultPriceTier: 'ڈیفالٹ قیمت کی قسم',
+        tierParchon: 'پرچون',
+        tierGatta: 'گٹہ',
+        tierWholesale: 'تھوک',
+        lowStockThreshold: 'کم اسٹاک کی وارننگ',
+        languageSettings: 'زبان',
+        appLanguage: 'ایپ کی زبان',
+        appearance: 'ظاہری شکل',
+        darkMode: 'ڈارک موڈ',
+        stockManagement: 'اسٹاک کا انتظام',
+        stockTracked: 'چیک آؤٹ کے بعد اسٹاک کم ہو جاتا ہے۔',
+        resetStock: 'اسٹاک ایکسل کی قدروں پر بحال کریں',
+        saveSettings: 'ترتیبات محفوظ کریں',
+        selectReceiptLanguage: 'رسید کی زبان منتخب کریں',
+        chooseReceiptLang: 'رسید کی زبان منتخب کریں:',
+        printEnglish: 'انگریزی میں رسید پرنٹ کریں',
+        printUrdu: 'اردو میں رسید پرنٹ کریں',
+        selectPrice: 'قیمت منتخب کریں',
+        changePrice: 'قیمت تبدیل کریں',
+        customPriceLabel: 'یا اپنی قیمت درج کریں:',
+        cancel: 'منسوخ',
+        addToCart: 'ٹوکری میں شامل کریں',
+        updatePrice: 'قیمت اپڈیٹ کریں',
+        enterQuantity: 'مقدار درج کریں',
+        enterQtyLabel: 'مقدار درج کریں:',
+        qtyExamples: 'مثال: 2.5 kg، 500 gm، یا صرف 2',
+        updateQuantity: 'مقدار اپڈیٹ کریں',
+        transactionDetails: 'لین دین کی تفصیل',
+        close: 'بند کریں',
+        reprintReceipt: 'رسید دوبارہ پرنٹ کریں',
+        loadingProducts: 'مصنوعات لوڈ ہو رہی ہیں...',
+        cartEmptyMsg: 'ٹوکری خالی ہے',
+        cartEmpty: 'ٹوکری خالی ہے',
+        noProducts: 'کوئی مصنوعات نہیں ملی',
+        outOfStock: 'اسٹاک ختم',
+        addToCartBtn: 'ٹوکری میں شامل کریں',
+        lowStock: 'کم اسٹاک',
+        inStock: 'دستیاب',
+        stock: 'اسٹاک:',
+        each: 'فی عدد',
+        custom: 'خصوصی',
+        view: 'دیکھیں',
+        noTransactionsFound: 'کوئی لین دین نہیں ملا',
+        badgeKhata: 'خاتہ',
+        badgeCash: 'نقد',
+        settingsSaved: 'ترتیبات محفوظ ہو گئیں!',
+        stockReset: 'اسٹاک ایکسل کی قدروں پر بحال ہو گیا',
+        resetStockConfirm: 'یہ تمام اسٹاک کو ایکسل کی اصل قدروں پر بحال کر دے گا۔ جاری رکھیں؟',
+        clearCartConfirm: 'پوری ٹوکری صاف کریں؟',
+        cartCleared: 'ٹوکری صاف ہو گئی',
+        checkoutComplete: 'چیک آؤٹ مکمل! کل: Rs.{total}{credit}',
+        creditSuffix: ' (خاتہ)',
+        parchonPrice: 'پرچون قیمت',
+        gattaPrice: 'گٹہ قیمت',
+        wholesalePrice: 'تھوک قیمت'
+    }
+};
+
+function t(key, vars = {}) {
+    const lang = settings.language === 'urdu' ? 'urdu' : 'english';
+    let text = I18N[lang][key] ?? I18N.english[key] ?? key;
+    Object.entries(vars).forEach(([k, v]) => {
+        text = text.replace(`{${k}}`, v);
+    });
+    return text;
+}
+
+function applyLanguage() {
+    const isUrdu = settings.language === 'urdu';
+    document.documentElement.lang = isUrdu ? 'ur' : 'en';
+    document.documentElement.dir = isUrdu ? 'rtl' : 'ltr';
+    document.body.classList.toggle('lang-urdu', isUrdu);
+    document.title = t('appTitle');
+
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        el.textContent = t(el.dataset.i18n);
+    });
+    document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+        el.placeholder = t(el.dataset.i18nPh);
+    });
+
+    const setText = (id, key) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = t(key);
+    };
+    const setPh = (id, key) => {
+        const el = document.getElementById(id);
+        if (el) el.placeholder = t(key);
+    };
+    const setTitle = (id, key) => {
+        const el = document.getElementById(id);
+        if (el) el.title = t(key);
+    };
+
+    setText('refreshBtn', 'refreshProducts');
+    setText('fileBtn', 'chooseLocalFile');
+    setPh('excelUrlInput', 'excelUrlPh');
+    setTitle('darkModeBtn', 'darkModeTitle');
+    setText('clearCartBtn', 'clear');
+    setText('checkoutBtn', 'checkout');
+    setPh('searchInput', 'searchPh');
+    setPh('customerNameInput', 'customerNamePh');
+    setPh('customerPhoneInput', 'customerPhonePh');
+
+    const langSelect = document.getElementById('settingsLanguage');
+    if (langSelect) langSelect.value = settings.language === 'urdu' ? 'urdu' : 'english';
+
+    const loadingGrid = document.getElementById('productsGrid');
+    if (loadingGrid?.querySelector('.loading') && !products.length) {
+        loadingGrid.innerHTML = `<div class="loading">${t('loadingProducts')}</div>`;
+    }
+
+    if (products.length) displayProducts(getFilteredProducts());
+    updateCart();
+    if (document.getElementById('reportsPanel')?.style.display !== 'none') renderReports();
+}
 
 function loadSettings() {
     try {
         const saved = localStorage.getItem('pos_settings');
-        if (saved) settings = { ...settings, ...JSON.parse(saved) };
+        if (saved) {
+            settings = { ...settings, ...JSON.parse(saved) };
+            settings.language = settings.language === 'urdu' ? 'urdu' : 'english';
+        }
     } catch (e) { /* ignore */ }
 }
 
@@ -77,6 +354,8 @@ function populateSettingsForm() {
     set('settingsStorePhone', settings.storePhone);
     set('settingsDefaultPriceTier', settings.defaultPriceTier);
     set('settingsLowStockThreshold', settings.lowStockThreshold);
+    const lang = document.getElementById('settingsLanguage');
+    if (lang) lang.value = settings.language === 'urdu' ? 'urdu' : 'english';
     const dm = document.getElementById('settingsDarkMode');
     if (dm) dm.checked = settings.darkMode;
 }
@@ -88,13 +367,16 @@ function saveSettingsFromForm() {
     settings.storePhone = get('settingsStorePhone');
     settings.defaultPriceTier = get('settingsDefaultPriceTier') || 'parchon';
     settings.lowStockThreshold = parseInt(get('settingsLowStockThreshold')) || 5;
+    const lang = document.getElementById('settingsLanguage');
+    settings.language = lang?.value === 'urdu' ? 'urdu' : 'english';
     const dm = document.getElementById('settingsDarkMode');
     settings.darkMode = dm ? dm.checked : false;
     saveSettings();
     applyDarkMode();
+    applyLanguage();
     const nameEl = document.getElementById('headerStoreName');
     if (nameEl) nameEl.textContent = settings.storeName;
-    showNotification('Settings saved!', 'success');
+    showNotification(t('settingsSaved'), 'success');
 }
 
 // ==================== STOCK TRACKING ====================
@@ -110,11 +392,11 @@ function saveStockOverrides() {
 }
 
 function resetStockOverrides() {
-    if (!confirm('This will reset all stock back to original Excel values. Continue?')) return;
+    if (!confirm(t('resetStockConfirm'))) return;
     stockOverrides = {};
     saveStockOverrides();
     displayProducts(products);
-    showNotification('Stock reset to Excel values', 'success');
+    showNotification(t('stockReset'), 'success');
 }
 
 function getEffectiveStock(product) {
@@ -194,6 +476,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Apply settings to UI
     applyDarkMode();
+    applyLanguage();
     const nameEl = document.getElementById('headerStoreName');
     if (nameEl) nameEl.textContent = settings.storeName;
 
@@ -605,7 +888,7 @@ async function tryOneDriveMethods(url) {
 function displayProducts(productsToShow) {
     if (!productsGrid) return;
     if (!productsToShow?.length) {
-        productsGrid.innerHTML = '<div class="empty">No products found</div>';
+        productsGrid.innerHTML = `<div class="empty">${t('noProducts')}</div>`;
         return;
     }
 
@@ -640,11 +923,11 @@ function displayProducts(productsToShow) {
                     ${product.wholesalePrice > 0 ? `Wholesale: Rs.${product.wholesalePrice.toFixed(2)}` : ''}
                 </div>` : '';
 
-            const stockDisplay = product.stock === 999 ? 'In Stock' : `Stock: ${effectiveStock}`;
+            const stockDisplay = product.stock === 999 ? t('inStock') : `${t('stock')} ${effectiveStock}`;
 
             return `
                 <div class="product-card" data-id="${product.id}">
-                    ${isLowStock ? '<div class="low-stock-badge">Low Stock</div>' : ''}
+                    ${isLowStock ? `<div class="low-stock-badge">${t('lowStock')}</div>` : ''}
                     ${imageHtml}
                     <div class="product-info">
                         <h3 class="product-name">${nameDisplay}</h3>
@@ -656,7 +939,7 @@ function displayProducts(productsToShow) {
                         ${pricesHtml}
                     </div>
                     <button class="btn btn-add" onclick="addToCart(${product.id})" ${isOutOfStock ? 'disabled' : ''}>
-                        ${isOutOfStock ? 'Out of Stock' : 'Add to Cart'}
+                        ${isOutOfStock ? t('outOfStock') : t('addToCartBtn')}
                     </button>
                 </div>
             `;
@@ -696,16 +979,16 @@ function showPriceModal(product, cartItemIndex = null) {
     document.getElementById('customPriceInput').value = selectedPrice.toFixed(2);
 
     const modalTitle = modal.querySelector('.modal-header h3');
-    if (modalTitle) modalTitle.textContent = cartItemIndex !== null ? 'Change Price' : 'Select Price';
+    if (modalTitle) modalTitle.textContent = cartItemIndex !== null ? t('changePrice') : t('selectPrice');
 
     let optionsHTML = '';
-    if (product.parchonPrice > 0) optionsHTML += priceOptionHTML('Parchon Price', product.parchonPrice, selectedPrice);
-    if (product.gattaPrice > 0) optionsHTML += priceOptionHTML('Gatta Price', product.gattaPrice, selectedPrice);
-    if (product.wholesalePrice > 0) optionsHTML += priceOptionHTML('Wholesale Price', product.wholesalePrice, selectedPrice);
+    if (product.parchonPrice > 0) optionsHTML += priceOptionHTML(t('parchonPrice'), product.parchonPrice, selectedPrice);
+    if (product.gattaPrice > 0) optionsHTML += priceOptionHTML(t('gattaPrice'), product.gattaPrice, selectedPrice);
+    if (product.wholesalePrice > 0) optionsHTML += priceOptionHTML(t('wholesalePrice'), product.wholesalePrice, selectedPrice);
     document.getElementById('priceOptions').innerHTML = optionsHTML;
 
-    const confirmBtn = modal.querySelector('.modal-footer .btn-primary');
-    if (confirmBtn) confirmBtn.textContent = cartItemIndex !== null ? 'Update Price' : 'Add to Cart';
+    const confirmBtn = document.getElementById('confirmPriceBtn') || modal.querySelector('.modal-footer .btn-primary');
+    if (confirmBtn) confirmBtn.textContent = cartItemIndex !== null ? t('updatePrice') : t('addToCart');
 
     modal.style.display = 'block';
 }
@@ -954,19 +1237,19 @@ function parseQuantity(input, unit = 'Kg') {
 // ==================== UPDATE CART DISPLAY ====================
 function updateCart() {
     if (cart.length === 0) {
-        cartItems.innerHTML = '<div class="empty-cart">Cart is empty</div>';
+        cartItems.innerHTML = `<div class="empty-cart">${t('cartEmptyMsg')}</div>`;
     } else {
         cartItems.innerHTML = cart.map((item, index) => {
             const hasCustom = item.customPrice && item.customPrice !== item.originalPrice;
             const priceDisplay = hasCustom
-                ? `Rs.${item.price.toFixed(2)} <span style="color:var(--warning);font-size:0.8em">(Custom)</span>`
+                ? `Rs.${item.price.toFixed(2)} <span style="color:var(--warning);font-size:0.8em">(${t('custom')})</span>`
                 : `Rs.${item.price.toFixed(2)}`;
 
             return `
             <div class="cart-item">
                 <div class="cart-item-info">
                     <h4>${escapeHtml(item.name)}</h4>
-                    <p>${priceDisplay} each</p>
+                    <p>${priceDisplay} ${t('each')}</p>
                 </div>
                 <div class="cart-item-controls">
                     <button class="btn-quantity" onclick="updateQuantityByIndex(${index}, -1)">−</button>
@@ -1025,7 +1308,7 @@ function updateSummary() {
 
 function clearCart() {
     if (cart.length === 0) return;
-    if (confirm('Clear the entire cart?')) {
+    if (confirm(t('clearCartConfirm'))) {
         cart = [];
         const discount = document.getElementById('discountAmount');
         if (discount) discount.value = '';
@@ -1036,7 +1319,7 @@ function clearCart() {
         const credit = document.getElementById('creditToggle');
         if (credit) credit.checked = false;
         updateCart();
-        showNotification('Cart cleared', 'info');
+        showNotification(t('cartCleared'), 'info');
     }
 }
 
@@ -1063,7 +1346,7 @@ function selectLanguage(language) {
 }
 
 function checkout() {
-    if (cart.length === 0) { showNotification('Cart is empty', 'error'); return; }
+    if (cart.length === 0) { showNotification(t('cartEmpty'), 'error'); return; }
 
     const subtotal = cart.reduce((sum, i) => sum + i.price * i.quantity, 0);
     const discount = getDiscountAmount(subtotal);
@@ -1072,7 +1355,8 @@ function checkout() {
     const customerPhone = (document.getElementById('customerPhoneInput')?.value || '').trim();
     const isCredit = document.getElementById('creditToggle')?.checked || false;
 
-    pendingCheckoutData = {
+    selectedReceiptLanguage = settings.language === 'urdu' ? 'urdu' : 'english';
+    finishCheckout({
         cartSnapshot: [...cart.map(i => ({ ...i }))],
         subtotal,
         discount,
@@ -1080,9 +1364,7 @@ function checkout() {
         customerName,
         customerPhone,
         isCredit
-    };
-
-    showLanguageModal();
+    });
 }
 
 async function finishCheckout(data) {
@@ -1131,7 +1413,10 @@ async function finishCheckout(data) {
     if (creditToggle) creditToggle.checked = false;
 
     updateCart();
-    showNotification(`Checkout complete! Total: Rs.${data.total.toFixed(2)}${data.isCredit ? ' (Khata)' : ''}`, 'success');
+    showNotification(t('checkoutComplete', {
+        total: data.total.toFixed(2),
+        credit: data.isCredit ? t('creditSuffix') : ''
+    }), 'success');
 }
 
 // ==================== RECEIPT ====================
@@ -1267,7 +1552,7 @@ function renderReports() {
     if (!tbody) return;
 
     if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-muted)">No transactions found</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text-muted)">${t('noTransactionsFound')}</td></tr>`;
         return;
     }
 
@@ -1286,9 +1571,9 @@ function renderReports() {
             </td>
             <td>${tx.discount > 0 ? `-Rs.${tx.discount.toFixed(2)}` : '—'}</td>
             <td><strong>Rs.${tx.total.toFixed(2)}</strong></td>
-            <td>${tx.isCredit ? '<span class="badge-credit">Khata</span>' : '<span class="badge-cash">Cash</span>'}</td>
+            <td>${tx.isCredit ? `<span class="badge-credit">${t('badgeKhata')}</span>` : `<span class="badge-cash">${t('badgeCash')}</span>`}</td>
             <td class="transaction-actions">
-                <button class="btn-reprint" onclick="viewTransaction(${realIndex})">View</button>
+                <button class="btn-reprint" onclick="viewTransaction(${realIndex})">${t('view')}</button>
             </td>
         </tr>`;
     }).join('');

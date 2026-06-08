@@ -923,3 +923,29 @@ body.dark-mode .price-option.selected { background: #1a2a4a; }
     .settings-row label { min-width: auto; }
     .settings-input { width: 100%; }
 }
+
+/* RTL layout for Urdu */
+html[dir="rtl"] body,
+body.lang-urdu {
+    font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Tahoma, Arial, sans-serif;
+}
+
+html[dir="rtl"] .header-controls,
+html[dir="rtl"] .section-header,
+html[dir="rtl"] .cart-meta-row,
+html[dir="rtl"] .discount-row,
+html[dir="rtl"] .summary-row,
+html[dir="rtl"] .settings-row,
+html[dir="rtl"] .reports-header,
+html[dir="rtl"] .cart-item-controls {
+    flex-direction: row-reverse;
+}
+
+html[dir="rtl"] .nav-tabs {
+    flex-direction: row-reverse;
+}
+
+html[dir="rtl"] .transactions-table th,
+html[dir="rtl"] .transactions-table td {
+    text-align: right;
+}
