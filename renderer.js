@@ -1423,84 +1423,183 @@ function generateReceipt(language = 'english', data = null) {
     const isCredit = data?.isCredit || false;
     const date = new Date().toLocaleString();
 
-    const t = language === 'urdu' ? {
+    const labels = language === 'urdu' ? {
         storeName: settings.storeName,
         receipt: 'رسید', date: 'تاریخ', customer: 'گاہک',
-        item: 'آئٹم', quantity: 'مقدار', price: 'قیمت', total: 'کل',
-        subtotal: 'ذیلی کل', discount: 'رعایت', thankYou: 'آپ کی خریداری کا شکریہ!',
+        subtotal: 'ذیلی کل', discount: 'رعایت', total: 'کل',
+        thankYou: 'آپ کی خریداری کا شکریہ!',
         credit: 'ادھار (خاتہ)'
     } : {
         storeName: settings.storeName,
         receipt: 'Receipt', date: 'Date', customer: 'Customer',
-        item: 'Item', quantity: 'Quantity', price: 'Price', total: 'Total',
-        subtotal: 'Subtotal', discount: 'Discount', thankYou: 'Thank you for your purchase!',
+        subtotal: 'Subtotal', discount: 'Discount', total: 'TOTAL',
+        thankYou: 'Thank you for your purchase!',
         credit: 'Credit (Khata)'
     };
 
     const isUrdu = language === 'urdu';
     const dir = isUrdu ? 'rtl' : 'ltr';
-    const font = isUrdu ? 'Arial, "Noto Nastaliq Urdu", sans-serif' : 'Arial, sans-serif';
+    const font = isUrdu
+        ? '"Noto Nastaliq Urdu", "Segoe UI", Tahoma, Arial, sans-serif'
+        : '"Courier New", Courier, monospace';
+
+    const itemsHtml = cartData.map(item => {
+        const name = escapeHtml(isUrdu && item.nameUrdu ? item.nameUrdu : item.name);
+        const qty = escapeHtml(formatQuantity(item.quantity, item.unit || 'Kg'));
+        const lineTotal = (item.price * item.quantity).toFixed(2);
+        return `
+        <div class="item">
+            <div class="item-row">
+                <span class="item-name">${name}</span>
+                <span class="item-total">Rs.${lineTotal}</span>
+            </div>
+            <div class="item-detail">${qty} × Rs.${item.price.toFixed(2)}</div>
+        </div>`;
+    }).join('');
 
     return `<!DOCTYPE html>
 <html dir="${dir}">
 <head>
 <meta charset="UTF-8">
-<title>${escapeHtml(t.receipt)}</title>
+<title>${escapeHtml(labels.receipt)}</title>
 <style>
-  body { font-family: ${font}; padding: 20px; direction: ${dir}; max-width: 600px; margin: 0 auto; }
-  h1 { text-align: center; font-size: 24px; margin-bottom: 4px; }
-  .store-sub { text-align: center; color: #666; font-size: 13px; margin-bottom: 16px; }
-  .meta { font-size: 13px; margin-bottom: 16px; }
-  .meta p { margin: 3px 0; }
-  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-  th, td { padding: 8px; text-align: ${isUrdu ? 'right' : 'left'}; border-bottom: 1px solid #ddd; font-size: 13px; }
-  th { background: #f2f2f2; font-weight: bold; }
-  .total-row td { font-weight: bold; font-size: 15px; border-top: 2px solid #333; }
-  .credit-badge { background: #ff9800; color: white; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: bold; }
-  .footer { text-align: center; margin-top: 24px; color: #555; font-size: 13px; }
-  @media print { body { padding: 10px; } }
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 80mm;
+    max-width: 80mm;
+    margin: 0 auto;
+    background: #fff;
+    color: #000;
+  }
+  body {
+    font-family: ${font};
+    font-size: 11px;
+    line-height: 1.35;
+    direction: ${dir};
+    padding: 4mm 3mm;
+  }
+  .header { text-align: center; margin-bottom: 6px; }
+  .store-name {
+    font-size: 14px;
+    font-weight: bold;
+    line-height: 1.25;
+    word-break: break-word;
+  }
+  .store-sub {
+    font-size: 10px;
+    line-height: 1.3;
+    margin-top: 2px;
+    word-break: break-word;
+  }
+  .divider {
+    border: none;
+    border-top: 1px dashed #000;
+    margin: 6px 0;
+  }
+  .meta { font-size: 10px; }
+  .meta p { margin: 2px 0; word-break: break-word; }
+  .credit-badge {
+    text-align: center;
+    font-weight: bold;
+    font-size: 11px;
+    margin: 4px 0;
+  }
+  .items { margin: 4px 0; }
+  .item { margin-bottom: 5px; page-break-inside: avoid; }
+  .item-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .item-name {
+    flex: 1;
+    font-weight: 600;
+    font-size: 11px;
+    word-break: break-word;
+  }
+  .item-total {
+    white-space: nowrap;
+    font-weight: 600;
+    font-size: 11px;
+  }
+  .item-detail {
+    font-size: 10px;
+    margin-top: 1px;
+    opacity: 0.85;
+  }
+  .summary { margin-top: 4px; }
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 2px 0;
+    font-size: 11px;
+  }
+  .summary-row.total {
+    font-size: 13px;
+    font-weight: bold;
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid #000;
+  }
+  .footer {
+    text-align: center;
+    margin-top: 8px;
+    font-size: 10px;
+    line-height: 1.4;
+  }
+  @media print {
+    html, body {
+      width: 80mm;
+      max-width: 80mm;
+    }
+    body {
+      padding: 2mm 3mm;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+  }
 </style>
 </head>
 <body>
-  <h1>${escapeHtml(t.storeName)}</h1>
-  ${settings.storeAddress ? `<div class="store-sub">${escapeHtml(settings.storeAddress)}</div>` : ''}
-  ${settings.storePhone ? `<div class="store-sub">${escapeHtml(settings.storePhone)}</div>` : ''}
-  <div class="meta">
-    <p><strong>${t.date}:</strong> ${date}</p>
-    ${customerName ? `<p><strong>${t.customer}:</strong> ${escapeHtml(customerName)}</p>` : ''}
-    ${isCredit ? `<p><span class="credit-badge">${t.credit}</span></p>` : ''}
+  <div class="header">
+    <div class="store-name">${escapeHtml(labels.storeName)}</div>
+    ${settings.storeAddress ? `<div class="store-sub">${escapeHtml(settings.storeAddress)}</div>` : ''}
+    ${settings.storePhone ? `<div class="store-sub">${escapeHtml(settings.storePhone)}</div>` : ''}
   </div>
-  <table>
-    <thead>
-      <tr>
-        <th>${t.item}</th>
-        <th>${t.quantity}</th>
-        <th>${t.price}</th>
-        <th>${t.total}</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${cartData.map(item => {
-        const name = escapeHtml(isUrdu && item.nameUrdu ? item.nameUrdu : item.name);
-        const qty = escapeHtml(formatQuantity(item.quantity, item.unit || 'Kg'));
-        return `<tr>
-          <td>${name}</td>
-          <td>${qty}</td>
-          <td>Rs.${item.price.toFixed(2)}</td>
-          <td>Rs.${(item.price * item.quantity).toFixed(2)}</td>
-        </tr>`;
-      }).join('')}
-    </tbody>
-    <tfoot>
-      ${discount > 0 ? `<tr><td colspan="3" style="text-align:${isUrdu ? 'left' : 'right'}">${t.subtotal}:</td><td>Rs.${subtotal.toFixed(2)}</td></tr>
-      <tr><td colspan="3" style="text-align:${isUrdu ? 'left' : 'right'};color:green">${t.discount}:</td><td style="color:green">-Rs.${discount.toFixed(2)}</td></tr>` : ''}
-      <tr class="total-row">
-        <td colspan="3" style="text-align:${isUrdu ? 'left' : 'right'}">${t.total}:</td>
-        <td>Rs.${total.toFixed(2)}</td>
-      </tr>
-    </tfoot>
-  </table>
-  <div class="footer">${t.thankYou}</div>
+  <hr class="divider">
+  <div class="meta">
+    <p><strong>${labels.date}:</strong> ${date}</p>
+    ${customerName ? `<p><strong>${labels.customer}:</strong> ${escapeHtml(customerName)}</p>` : ''}
+    ${isCredit ? `<div class="credit-badge">*** ${labels.credit} ***</div>` : ''}
+  </div>
+  <hr class="divider">
+  <div class="items">
+    ${itemsHtml}
+  </div>
+  <hr class="divider">
+  <div class="summary">
+    ${discount > 0 ? `
+    <div class="summary-row">
+      <span>${labels.subtotal}</span>
+      <span>Rs.${subtotal.toFixed(2)}</span>
+    </div>
+    <div class="summary-row">
+      <span>${labels.discount}</span>
+      <span>-Rs.${discount.toFixed(2)}</span>
+    </div>` : ''}
+    <div class="summary-row total">
+      <span>${labels.total}</span>
+      <span>Rs.${total.toFixed(2)}</span>
+    </div>
+  </div>
+  <hr class="divider">
+  <div class="footer">${labels.thankYou}</div>
 </body>
 </html>`;
 }
