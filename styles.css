@@ -1,3 +1,11 @@
+@font-face {
+    font-family: 'Noto Nastaliq Urdu';
+    src: url('./fonts/NotoNastaliqUrdu.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: swap;
+}
+
 /* ===================== CSS VARIABLES ===================== */
 :root {
     --primary: #667eea;
@@ -927,7 +935,27 @@ body.dark-mode .price-option.selected { background: #1a2a4a; }
 /* RTL layout for Urdu */
 html[dir="rtl"] body,
 body.lang-urdu {
-    font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Tahoma, Arial, sans-serif;
+    font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Urdu Typesetting', serif;
+    line-height: 1.8;
+}
+
+/* Native form controls do not inherit the body's font in Chromium. */
+body.lang-urdu button,
+body.lang-urdu input,
+body.lang-urdu select,
+body.lang-urdu option,
+body.lang-urdu textarea {
+    font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Urdu Typesetting', serif;
+    line-height: 1.8;
+    letter-spacing: normal;
+    text-transform: none;
+}
+
+/* Urdu can also appear beside English product names and in language pickers. */
+.urdu-text,
+[lang="ur"] {
+    font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Urdu Typesetting', serif;
+    line-height: 1.8;
 }
 
 html[dir="rtl"] .header-controls,

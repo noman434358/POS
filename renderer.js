@@ -899,7 +899,7 @@ function displayProducts(productsToShow) {
             const safeCategory = escapeHtml(product.category);
 
             const nameDisplay = product.nameUrdu
-                ? `${safeName}<br><small style="color:var(--text-muted);font-size:0.85em">${safeNameUrdu}</small>`
+                ? `${safeName}<br><small class="urdu-text" lang="ur" dir="rtl" style="color:var(--text-muted);font-size:0.85em">${safeNameUrdu}</small>`
                 : safeName;
 
             const displayPrice = product.parchonPrice || product.gattaPrice || product.wholesalePrice || product.price;
@@ -1393,7 +1393,7 @@ async function finishCheckout(data) {
     const win = window.open('', '_blank');
     win.document.write(receipt);
     win.document.close();
-    win.print();
+    win.document.fonts.ready.then(() => win.print());
 
     // Clear cart
     cart = [];
@@ -1440,7 +1440,7 @@ function generateReceipt(language = 'english', data = null) {
     const isUrdu = language === 'urdu';
     const dir = isUrdu ? 'rtl' : 'ltr';
     const font = isUrdu
-        ? '"Noto Nastaliq Urdu", "Segoe UI", Tahoma, Arial, sans-serif'
+        ? '"Noto Nastaliq Urdu", "Jameel Noori Nastaleeq", "Urdu Typesetting", serif'
         : '"Courier New", Courier, monospace';
 
     const itemsHtml = cartData.map(item => {
@@ -1463,6 +1463,12 @@ function generateReceipt(language = 'english', data = null) {
 <meta charset="UTF-8">
 <title>${escapeHtml(labels.receipt)}</title>
 <style>
+  @font-face {
+    font-family: 'Noto Nastaliq Urdu';
+    src: url('./fonts/NotoNastaliqUrdu.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400 700;
+  }
   @page {
     size: 80mm auto;
     margin: 0;
@@ -1722,7 +1728,7 @@ function reprintReceipt() {
     const win = window.open('', '_blank');
     win.document.write(receipt);
     win.document.close();
-    win.print();
+    win.document.fonts.ready.then(() => win.print());
 }
 
 // Report filter change
